@@ -1,46 +1,32 @@
-# Sub-second Time Resolution for HTTP Caching
+# Millisecond Resolution for HTTP Cache Freshness
 
-HTTP caching expresses time in whole seconds: `max-age`, `s-maxage`, `Age` and `stale-while-revalidate` use delta-seconds, and `Expires` and `Date` use HTTP-date. For resources that change about once a second and pass through several layers of shared caches, such as live streaming manifests, one second is too coarse.
+This is the working area for the individual Internet-Draft, "Millisecond Resolution for HTTP Cache Freshness".
 
-This repository holds an early proposal that reviews the time-related caching fields and directives as a set, and proposes one convention for giving the ones that need it a resolution finer than one second, without changing anything that exists today.
+- [Internet-Draft source](draft-seddon-httpbis-subsecond-freshness.md)
+- [Explainer with deployment examples, alternatives and background](explainer.md)
 
-**Read the proposal: [draft-seddon-httpbis-subsecond-freshness.md](draft-seddon-httpbis-subsecond-freshness.md)**
+## Summary
 
-## The two options in brief
+HTTP caches measure freshness in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between. We propose letting an origin set a freshness lifetime in milliseconds and having each cache count the time already spent upstream. For example, a shield serving a live playlist at age 175 ms could report how much of a 200 ms lifetime has elapsed. The same format can express a lifetime of 1.25 seconds.
 
-In both, each existing directive gets a higher-precision companion that is sent alongside it. Caches that don't recognise the companion carry on as they do today.
+The whole-second limit comes from one grammar rule, `delta-seconds` in RFC 9111. We propose a `delta-milliseconds` sibling and use it for companions to `max-age`, `s-maxage` and `stale-while-revalidate` in `Cache-Control` or `CDN-Cache-Control`, plus an `Age-Ms` response field.
 
-**Option A: a `-ms` companion, in milliseconds**
+During rollout, send both resolutions. Older caches use the whole-second policy. Upgraded caches use the finer values when they can account for age from the origin or last validation. An older cache can replay an outdated fine age, so an upgraded cache on an unknown path uses the whole-second fallback.
 
-    Cache-Control: max-age=1, max-age-ms=200,
-                   stale-while-revalidate=1, stale-while-revalidate-ms=200
+Media over QUIC is attracting much of the current interest in low-latency live delivery, and its relays already cache in integer milliseconds. HLS and DASH over HTTP caches remain the deployed base for large live events. Millisecond freshness would let those services use their existing caches closer to the same timescales, which we think would keep HTTP a practical choice for latency-sensitive delivery. The effect on players is still to be measured.
 
-Simple integers, which work unchanged in targeted fields such as `CDN-Cache-Control`. The resolution is fixed at one millisecond.
+## Building the draft
 
-**Option B: a companion with an explicit unit (`ms`, `us`, `ns`)**
+The draft is written in kramdown-rfc Markdown. With Nix:
 
-    Cache-Control: max-age=1, max-age-fine=200ms,
-                   stale-while-revalidate=1, stale-while-revalidate-fine=200ms
+```sh
+nix shell nixpkgs#rubyPackages.kramdown-rfc2629 nixpkgs#xml2rfc -c sh -c \
+  'kramdown-rfc draft-seddon-httpbis-subsecond-freshness.md > draft-seddon-httpbis-subsecond-freshness.xml \
+   && xml2rfc --text --html draft-seddon-httpbis-subsecond-freshness.xml'
+```
 
-One set of directives that should last. Needs a different spelling in Structured Fields.
+The `Makefile` uses [i-d-template](https://github.com/martinthomson/i-d-template). Running `make` clones the template into `lib/` and builds the text and HTML, given `kramdown-rfc` and `xml2rfc` on the path.
 
-Directive names are placeholders. Either way, `Age` needs a higher-precision companion as well.
+## Contributing
 
-## Why stale-while-revalidate is included
-
-A 200 millisecond lifetime expires five times a second. Pairing it with a 200 millisecond `stale-while-revalidate` window lets each cache keep serving while it refreshes in the background, so clients are not stalled. The existing directive cannot express a window shorter than one second.
-
-## Status
-
-This is not yet an Internet-Draft. It is here to support discussion on the [HTTP Working Group mailing list](https://lists.w3.org/Archives/Public/ietf-http-wg/) (ietf-http-wg@w3.org). If there is interest, it will be turned into an individual draft.
-
-## Feedback
-
-Comments are very welcome, either on the mailing list or as issues in this repository. The open questions are listed in [Section 10 of the proposal](draft-seddon-httpbis-subsecond-freshness.md#10-open-questions).
-
-## Background
-
-- [RFC 9111: HTTP Caching](https://www.rfc-editor.org/rfc/rfc9111.html)
-- [RFC 5861: HTTP Cache-Control Extensions for Stale Content](https://www.rfc-editor.org/rfc/rfc5861.html)
-- [RFC 9213: Targeted HTTP Cache Control](https://www.rfc-editor.org/rfc/rfc9213.html)
-- [2011 list discussion of one-second granularity](https://lists.w3.org/Archives/Public/ietf-http-wg/2011AprJun/0480.html)
+Discussion takes place on the HTTP Working Group mailing list, `ietf-http-wg@w3.org`. Issues and pull requests are welcome in this repository.

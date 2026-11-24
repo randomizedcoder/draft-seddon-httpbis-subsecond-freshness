@@ -7,13 +7,32 @@ This is the working area for the individual Internet-Draft, "Millisecond Resolut
 
 ## Summary
 
-HTTP caches measure freshness in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between. We propose letting an origin set a freshness lifetime in milliseconds and having each cache count the time already spent upstream. For example, a shield serving a live playlist at age 175 ms could report how much of a 200 ms lifetime has elapsed. The same format can express a lifetime of 1.25 seconds.
+- **Problem.** HTTP caches measure freshness in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between.
+- **Cause.** One grammar rule, `delta-seconds` in RFC 9111.
+- **Proposal.** A `delta-milliseconds` sibling, used by the companions below. Each cache counts the time already spent upstream.
+- **Rollout.** Send both resolutions. Older caches use the whole-second policy. Upgraded caches use the finer values when they can account for age since the origin or the last validation, and otherwise fall back to whole seconds.
 
-The whole-second limit comes from one grammar rule, `delta-seconds` in RFC 9111. We propose a `delta-milliseconds` sibling and use it for companions to `max-age`, `s-maxage` and `stale-while-revalidate` in `Cache-Control` or `CDN-Cache-Control`, plus an `Age-Ms` response field.
+| Existing | Companion |
+|---|---|
+| `max-age` | `max-age-ms` |
+| `s-maxage` | `s-maxage-ms` |
+| `stale-while-revalidate` | `stale-while-revalidate-ms` |
+| `Age` | `Age-Ms` |
 
-During rollout, send both resolutions. Older caches use the whole-second policy. Upgraded caches use the finer values when they can account for age from the origin or last validation. An older cache can replay an outdated fine age, so an upgraded cache on an unknown path uses the whole-second fallback.
+A shield serving a live playlist at age 175 ms of a 200 ms lifetime sends:
 
-Media over QUIC is attracting much of the current interest in low-latency live delivery, and its relays already cache in integer milliseconds. HLS and DASH over HTTP caches remain the deployed base for large live events. Millisecond freshness would let those services use their existing caches closer to the same timescales, which we think would keep HTTP a practical choice for latency-sensitive delivery. The effect on players is still to be measured.
+```http
+Cache-Control: max-age=0, max-age-ms=200
+Age: 0
+Age-Ms: 175
+```
+
+### Media over QUIC
+
+- MoQ relays already cache in integer milliseconds.
+- HLS and DASH over HTTP caches remain the deployed base for large live events.
+- Millisecond freshness would let those services use their existing caches closer to the same timescales. We think this would keep HTTP a practical choice for latency-sensitive delivery.
+- The effect on players is still to be measured.
 
 ## Building the draft
 

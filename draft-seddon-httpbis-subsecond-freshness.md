@@ -80,12 +80,15 @@ that has held a response for 900 milliseconds reports `Age: 0`. A downstream
 cache then starts counting from zero, and each tier can hold the response
 for up to the full lifetime again.
 
-This document defines:
+This document defines a millisecond companion for each of the following:
 
-- the delta-milliseconds rule ({{delta-ms}});
-- the max-age-ms, s-maxage-ms and stale-while-revalidate-ms response
-  directives ({{directives}}); and
-- the Age-Ms response header field ({{age-ms}}).
+| Whole seconds          | Milliseconds              | Defined in     |
+|------------------------|---------------------------|----------------|
+| delta-seconds rule     | delta-milliseconds rule   | {{delta-ms}}   |
+| max-age                | max-age-ms                | {{directives}} |
+| s-maxage               | s-maxage-ms               | {{directives}} |
+| stale-while-revalidate | stale-while-revalidate-ms | {{directives}} |
+| Age                    | Age-Ms                    | {{age-ms}}     |
 
 For example, a cache that has held a response for 175 milliseconds of a
 200 millisecond lifetime sends:
@@ -100,17 +103,17 @@ A downstream cache that implements this specification, and that is
 configured to rely on the sender's Age-Ms value, can reuse the response for
 the remaining 25 milliseconds. Any other cache applies `max-age=0`.
 
-Finer resolution was raised in the HTTP Working Group in 2011, when it was
-noted that sites caching content for a couple of seconds are limited by the
-one-second granularity. The response observed that a Cache-Control extension
-could provide higher precision, that such short lifetimes had been useful
-mainly in controlled deployments, and that the Date header field has a
-resolution of one second {{WG2011}}. This document takes the extension
-approach. Since then, other protocols used for live media have adopted millisecond
-units for comparable purposes. Media over QUIC Transport expresses the time
-an object can be served from a relay's cache in milliseconds
-{{I-D.ietf-moq-transport}}, and QUIC expresses its idle timeout in
-milliseconds ({{Section 18.2 of RFC9000}}).
+Finer resolution was raised in the HTTP Working Group in 2011, for sites
+that cache content for a couple of seconds. The response observed that a
+Cache-Control extension could provide higher precision, that such short
+lifetimes had been useful mainly in controlled deployments, and that the
+Date header field has a resolution of one second {{WG2011}}. This document
+takes the extension approach.
+
+Protocols used for live media have since adopted millisecond units. Media
+over QUIC Transport expresses the time an object can be served from a
+relay's cache in milliseconds {{I-D.ietf-moq-transport}}, and QUIC
+expresses its idle timeout in milliseconds ({{Section 18.2 of RFC9000}}).
 
 This document does not change the behaviour of caches that do not implement
 it, and it does not define companions for request directives.
@@ -169,12 +172,17 @@ in {{Section 1.2.2 of RFC9111}}. A 31-bit count of milliseconds overflows
 in less than 25 days.
 
 A value that does not match the delta-milliseconds rule is invalid. This
-includes a value with a sign, a fraction, a unit suffix or more than
-fifteen digits. The consequences of an invalid value are specified where
-the rule is used. This differs from delta-seconds, where a value that is
-too large is treated as 2^31 seconds. A delta-milliseconds value
-is always accompanied by a whole-second value that the recipient can use
-instead.
+includes a value with:
+
+- a sign;
+- a fraction;
+- a unit suffix; or
+- more than fifteen digits.
+
+The consequences of an invalid value are specified where the rule is used.
+This differs from delta-seconds, where a value that is too large is treated
+as 2^31 seconds. A delta-milliseconds value is always accompanied by a
+whole-second value that the recipient can use instead.
 
 # Fine Cache Directives {#directives}
 
@@ -235,10 +243,8 @@ response directive.
 A sender that generates a fine directive MUST also generate its base
 directive in the same field. The base directive is the policy that the
 sender accepts from every cache that does not use the fine directive. The
-two values are otherwise independent. A sender that requires sub-second
-freshness and cannot accept more can send a base value of zero. A sender
-that can accept a full second at legacy caches can send a base value of
-one.
+two values are otherwise independent. {{base-policy}} discusses the choice
+of base value.
 
 An implementing cache MUST ignore a fine directive when any of the
 following is true:
@@ -442,17 +448,21 @@ directive with one that does not, the fine directive no longer applies.
 
 # Deployment Considerations
 
-## Choosing the Whole-Second Policy
+## Choosing the Whole-Second Policy {#base-policy}
 
 Every cache between the origin server and the client that does not use the
 fine directives applies the base directives. This includes implementing
 caches that have no fine age. The base values therefore decide what happens
 on any path that is not under the sender's control.
 
-A base value of zero limits reuse to implementing caches on configured
-paths. A base value of one or more permits legacy caches to hold the
-response for that time in addition to any time spent upstream, as they do
-today.
+| Base value | Effect at a cache that applies the base directive |
+|------------|---------------------------------------------------|
+| 0          | The directive grants no time. Reuse is limited to implementing caches on configured paths. |
+| 1 or more  | The cache can hold the response for that many seconds in addition to any time spent upstream, as it does today. |
+
+A sender that requires sub-second freshness and cannot accept more sends a
+base value of zero. A sender that can accept a full second at legacy caches
+sends a base value of one.
 
 Senders can scope the fine policy to the caches they have an arrangement
 with by using a targeted field ({{targeted}}).
@@ -585,14 +595,15 @@ A fraction within Age:
 
 # Other Durations in HTTP {#other}
 
-Other HTTP fields carry durations in whole seconds. They are not changed by
-this document. The stale-if-error directive {{RFC5861}}, the max-age,
-min-fresh and max-stale request directives ({{Section 5.2.1 of RFC9111}})
-and the ttl parameter of Cache-Status {{RFC9211}} are candidates for the
-same treatment if there is a use for it. The Date, Expires and
-Last-Modified fields are timestamps with a resolution of one second.
-Sub-second changes to a representation can be distinguished with entity
-tags ({{Section 8.8.3 of RFC9110}}).
+Other HTTP fields carry time in whole seconds. They are not changed by this
+document.
+
+| Field or directive | Note |
+|--------------------|------|
+| stale-if-error {{RFC5861}} | Candidate for the same treatment if there is a use for it. |
+| max-age, min-fresh and max-stale request directives ({{Section 5.2.1 of RFC9111}}) | Candidates, as above. |
+| ttl parameter of Cache-Status {{RFC9211}} | Candidate, as above. |
+| Date, Expires, Last-Modified | Timestamps with a resolution of one second. Sub-second changes to a representation can be distinguished with entity tags ({{Section 8.8.3 of RFC9110}}). |
 
 # Implementation Status
 

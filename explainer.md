@@ -200,9 +200,46 @@ We have seen live playlists reach players four or five seconds old. To assess ho
 
 HLS playlists already express fractional segment durations and can timestamp the first sample to milliseconds. An origin might also use a sub-second modification time when generating an opaque ETag. Date and Last-Modified carry whole seconds. A fine cache directive would let the origin set a lifetime such as 1.25 seconds independently of the media timeline. [RFC 8216 §§4.3.2.1](https://www.rfc-editor.org/rfc/rfc8216.html#section-4.3.2.1) and [4.3.2.6](https://www.rfc-editor.org/rfc/rfc8216.html#section-4.3.2.6) · [RFC 9110 §§5.6.7](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.6.7) and [8.8.3.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.8.3.1)
 
-### Historical context
+### History of whole-second resolution
 
-HTTP/1.0 specified an absolute Expires date in May 1996. HTTP/1.1 specified whole-second `max-age` and `Age` in January 1997. The WG revisited finer resolution in 2011, including the limits of Date and clock synchronisation. [RFC 1945 §10.7](https://www.rfc-editor.org/rfc/rfc1945.html#section-10.7) · [RFC 2068 §3.3.2](https://www.rfc-editor.org/rfc/rfc2068.html#section-3.3.2) · [2011 WG discussion](https://lists.w3.org/Archives/Public/ietf-http-wg/2011AprJun/0480.html)
+The whole-second unit entered HTTP caching in 1997 and has been carried forward unchanged through every revision. The tables below list each specification that defines or reuses it, then the requests for finer resolution that we could find.
+
+#### In the HTTP specifications
+
+| Date | Document | What it says about time |
+|---|---|---|
+| May 1996 | RFC 1945, HTTP/1.0 | Freshness is an absolute Expires date. There is no Age field, no max-age and no delta-seconds rule. Retry-After, in an appendix of extra features, takes a date or "an integer number of seconds". [§10.7](https://www.rfc-editor.org/rfc/rfc1945.html#section-10.7) · [Appendix D.2.8](https://www.rfc-editor.org/rfc/rfc1945.html#appendix-D.2.8) |
+| January 1997 | RFC 2068, HTTP/1.1 | Introduces `delta-seconds = 1*DIGIT`, the Age field and max-age. Age is "non-negative decimal integers, representing time in seconds". The 2^31 overflow value and the advice to use at least 31 bits appear here, under Age. [§3.3.2](https://www.rfc-editor.org/rfc/rfc2068.html#section-3.3.2) · [§13.2.3](https://www.rfc-editor.org/rfc/rfc2068.html#section-13.2.3) · [§14.6](https://www.rfc-editor.org/rfc/rfc2068.html#section-14.6) · [§14.9](https://www.rfc-editor.org/rfc/rfc2068.html#section-14.9) |
+| February 1997 | RFC 2109, cookies | The first reuse outside caching. `Max-Age=delta-seconds`. [§4.2.2](https://www.rfc-editor.org/rfc/rfc2109.html#section-4.2.2) |
+| March 1997 | WG list, Roy Fielding | Restores text omitted from RFC 2068 that defines response max-age as an age "(in seconds)". [Message](https://lists.w3.org/Archives/Public/ietf-http-wg/1997JanMar/0651.html) |
+| June 1999 | RFC 2616, HTTP/1.1 | Keeps the rule and the Age text. Adds `s-maxage`, also in delta-seconds. [§3.3.2](https://www.rfc-editor.org/rfc/rfc2616.html#section-3.3.2) · [§14.6](https://www.rfc-editor.org/rfc/rfc2616.html#section-14.6) · [§14.9.3](https://www.rfc-editor.org/rfc/rfc2616.html#section-14.9.3) |
+| January 2002 | RFC 3229, delta encoding | The `retain` cache directive takes an optional delta-seconds value. [§10.8.1](https://www.rfc-editor.org/rfc/rfc3229.html#section-10.8.1) |
+| May 2010 | RFC 5861 | stale-while-revalidate and stale-if-error import delta-seconds from RFC 2616. [§3](https://www.rfc-editor.org/rfc/rfc5861.html#section-3) · [§4](https://www.rfc-editor.org/rfc/rfc5861.html#section-4) |
+| 2011–2012 | RFC 6265, RFC 6797 | Cookie Max-Age and Strict-Transport-Security max-age use the same unit. [RFC 6265 §5.2.2](https://www.rfc-editor.org/rfc/rfc6265.html#section-5.2.2) · [RFC 6797 §6.1.1](https://www.rfc-editor.org/rfc/rfc6797.html#section-6.1.1) |
+| June 2014 | RFC 7234, HTTP/1.1 caching | Moves delta-seconds into the caching document. The overflow rule now applies to every delta-seconds value. Retry-After gets its own `delay-seconds` rule in RFC 7231. Prefer `wait` adopts delta-seconds the same month. [RFC 7234 §1.2.1](https://www.rfc-editor.org/rfc/rfc7234.html#section-1.2.1) · [RFC 7231 §7.1.3](https://www.rfc-editor.org/rfc/rfc7231.html#section-7.1.3) · [RFC 7240 §4.3](https://www.rfc-editor.org/rfc/rfc7240.html#section-4.3) |
+| April 2016 | RFC 7838, Alt-Svc | The `ma` parameter is delta-seconds. [§3.1](https://www.rfc-editor.org/rfc/rfc7838.html#section-3.1) |
+| June 2022 | RFC 9111, HTTP caching | The current definition, unchanged in substance from 1997. [§1.2.2](https://www.rfc-editor.org/rfc/rfc9111.html#section-1.2.2) · [§5.1](https://www.rfc-editor.org/rfc/rfc9111.html#section-5.1) |
+| June 2022 | RFC 9211, RFC 9213 | Cache-Status `ttl` is an integer number of seconds. Targeted fields say implementations should not consume a max-age with a decimal value. [RFC 9211 §2.4](https://www.rfc-editor.org/rfc/rfc9211.html#section-2.4) · [RFC 9213 §2.1](https://www.rfc-editor.org/rfc/rfc9213.html#section-2.1) |
+| September 2024 | RFC 9651, Structured Fields | The Date type is an integer number of seconds. [§3.3.7](https://www.rfc-editor.org/rfc/rfc9651.html#section-3.3.7) |
+
+#### Requests for finer resolution
+
+| Date | Where | What was asked and what happened |
+|---|---|---|
+| June 2011 | HTTP WG list | Poul-Henning Kamp, the author of Varnish, wrote that "some high volume sites cache content for only a couple of seconds" and that one-second granularity is "a serious limitation on caching policy". He proposed `delta-seconds = 1*DIGIT [ '.' *DIGIT]`. Mark Nottingham replied that such lifetimes had been useful in controlled deployments, that nothing prevented a Cache-Control extension with higher precision, and that Date has one-second resolution. The grammar was left as it was. [Proposal](https://lists.w3.org/Archives/Public/ietf-http-wg/2011AprJun/0474.html) · [Reply](https://lists.w3.org/Archives/Public/ietf-http-wg/2011AprJun/0480.html) |
+| July 2012 | nginx mailing list | A user asked for `proxy_cache_valid 200 301 302 500ms`. The reply was that it could not be done, and that millisecond granularity would limit the maximum time to about 24.8 days. That is the 31-bit limit discussed under "Delta milliseconds" above. [Question](https://mailman.nginx.org/pipermail/nginx/2012-July/034628.html) · [Reply](https://mailman.nginx.org/pipermail/nginx/2012-July/034651.html) |
+| February 2017 | Unpublished draft by the author | Proposed a centisecond suffix for cache directives, alongside stale-while-revalidate for Expires, for live streaming manifests. It was an initial draft for discussion with potential co-authors and was not published. |
+| March 2018 | nginx ticket 1505 | "Milliseconds and dynamic time support for *_cache_valid". `proxy_cache_valid 200 200ms` is rejected as an invalid time value. The ticket remains open. [Ticket](https://trac.nginx.org/nginx/ticket/1505) |
+| May 2019 | HTTP WG issue | A request to allow fractional values for Prefer `wait`, because "sub-second values seems necessary for this header to be practically useful". It was closed as out of scope for the documents then in progress. [http-core issue 227](https://github.com/httpwg/http-core/issues/227) |
+| February 2020 | Varnish | The parser for max-age and Age began to accept and ignore a decimal point. The source comment reads "to be future compatible with fractional seconds". [Commit](https://github.com/varnishcache/varnish-cache/commit/aaaf7b383339b18f368935ff3fd38a6575c15666) · [Source](https://github.com/varnishcache/varnish-cache/blob/master/bin/varnishd/cache/cache_rfc2616.c) |
+| August 2025 | HLS second edition draft | Recommends that successful responses to non-blocking playlist requests be cached for half the Target Duration. Target Duration is a whole number of seconds, so a one-second target calls for a 500 ms lifetime. [draft-pantos-hls-rfc8216bis, Appendix B.1](https://datatracker.ietf.org/doc/draft-pantos-hls-rfc8216bis/) |
+| November 2026 | Media over QUIC Transport | Defines `MAX_CACHE_DURATION` for relay caches in integer milliseconds. [draft-ietf-moq-transport-23 §10.3](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) |
+
+We searched the Squid, Apache Traffic Server, HAProxy and Envoy issue trackers and the HTTP WG repositories for similar requests and found none. That search covered issue titles and text for terms such as "sub-second" and "milliseconds" with "max-age". It did not cover mailing lists or the Squid Bugzilla, so earlier discussions may exist. Pointers are welcome.
+
+Two patterns recur. Each request came from someone operating or building a reverse proxy cache. Each stopped at the same point, which is that the wire format has no place for a fraction and decimals are unsafe to send to deployed caches.
+
+### Hardware then and now
 
 | Storage example | Read | Write | What the figures measure |
 |---|---:|---:|---|

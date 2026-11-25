@@ -9,10 +9,13 @@ This is the working area for the individual Internet-Draft, "Millisecond Resolut
 
 ## Summary
 
-- **Problem.** HTTP caches measure freshness in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between.
-- **Cause.** One grammar rule, `delta-seconds` in RFC 9111.
+- **Problem.** HTTP expresses freshness and age in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between.
+- **Cause.** One grammar rule, `delta-seconds` in RFC 9111. The limit is in the wire format, not in every implementation.
+- **Today.** We read the source of eleven browser engines and caches. Chromium, WebKit and Varnish already decide freshness at sub-second resolution. Three more store a finer time and round it to seconds. Five use whole seconds throughout. None can be told a sub-second lifetime in a standard way, and every cache sends `Age` in whole seconds. [Survey](explainer.md#what-implementations-do-today)
+- **Aim.** Let the wire format carry what those implementations already measure, and give the rest a defined target.
 - **Proposal.** A `delta-milliseconds` sibling, used by the companions below. Each cache counts the time already spent upstream.
 - **Scope.** Every whole-second duration in HTTP caching, plus Retry-After and Prefer `wait`.
+- **Browsers.** No change is required. A browser applies the whole-second policy, as it does today. [Browsers](explainer.md#browsers)
 - **Rollout.** Send both resolutions. Older caches use the whole-second policy. Upgraded caches use the finer values when they can account for age since the origin or the last validation, and otherwise fall back to whole seconds.
 
 | Existing | Companion | Used in |

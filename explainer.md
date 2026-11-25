@@ -4,10 +4,13 @@ Dave Seddon · Discussion proposal for the HTTP Working Group · [Internet-Draft
 
 ## Summary
 
-- **Problem.** HTTP caches count freshness and age in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between.
+- **Problem.** HTTP expresses freshness and age in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between.
+- **Today.** The limit is in the wire format, not in every implementation. Of eleven browser engines and caches we read, Chromium, WebKit and Varnish already decide freshness at sub-second resolution, three more store a finer time and round it, and five use whole seconds throughout. None can be told a sub-second lifetime in a standard way. [Survey](#what-implementations-do-today)
+- **Aim.** Let the wire format carry what those implementations already measure, and give the rest a defined target.
 - **Proposal.** Millisecond companions for the cache directives that carry a duration and for the Age response field, so that each cache counts the time already spent upstream.
 - **Scope.** Every whole-second duration in HTTP caching, plus Retry-After and Prefer `wait`. Appendix A lists each field and what we left unchanged.
 - **Rollout.** The origin sends a whole-second fallback with every companion. Older caches use the fallback.
+- **Browsers.** No change is required. A browser applies the whole-second fallback. [Browsers](#browsers)
 - **Measured.** Through five nginx caches, responses under `max-age=1` averaged 999 ms behind the origin, and 48 ms under `max-age-ms=100`. [Practical tests](measurements.md)
 
 HTTP already carries upstream age across cache tiers. A new lifetime at each tier is not its intended behaviour. The proposal adds a sub-second lifetime and preserves fractional age on a configured path; it does not repair arbitrary Age handling or guarantee the age of the underlying application data. [RFC 9111 §4.2.3](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.3)
@@ -189,8 +192,240 @@ For retries, any random delay belongs after the selected Retry-After minimum; su
 
 libcurl does not maintain an HTTP representation cache. An application can already send the companion request directives and read the response fields through its existing header APIs. Consequently, the cache prototype belongs in nginx and other caches; libcurl is useful for a second implementation of Retry-After-Ms and for client examples. `CURLINFO_RETRY_AFTER` currently returns seconds and should retain those units; a millisecond result needs a distinct API or an application-level adapter. [curl's cache inventory](https://everything.curl.dev/internals/caches.html) · [curl_easy_header](https://curl.se/libcurl/c/curl_easy_header.html) · [CURLINFO_RETRY_AFTER](https://curl.se/libcurl/c/CURLINFO_RETRY_AFTER.html)
 
+## What implementations do today
+
+We read the source of three browser engines and eight caches in November 2026 to see where the whole-second limit actually lives. The question for each: at what resolution does it measure the age of a stored response, and at what resolution can it be told a lifetime?
+
+| Implementation | Age measured internally | Effective freshness resolution | `Age` it sends | Given `max-age=0.2` |
+|---|---|---|---|---|
+| Chromium | Microseconds | Sub-second | n/a | Network cache ignores the directive |
+| WebKit (Safari) | Floating-point seconds | Sub-second | n/a | Uses 200 ms |
+| Firefox | Whole seconds | One second | n/a | Not checked |
+| Varnish | Floating-point seconds | Sub-second | Whole seconds | Truncates to 0 |
+| Envoy cache filter | Sub-second type | One second: age is cast to seconds | Whole seconds | Ignores the directive |
+| Apache httpd `mod_cache` | Microseconds | One second: compared in seconds | Whole seconds | Ignores the directive |
+| Souin (Caddy cache) | Nanoseconds | One second | Whole seconds, rounded up | Ignores the directive |
+| nginx | Whole seconds | One second | None | Does not cache the response |
+| Squid | Whole seconds | One second | Whole seconds | Truncates to 0 |
+| Apache Traffic Server | Whole seconds | One second | Whole seconds | Truncates to 0 |
+| HAProxy cache | Whole seconds | One second | Whole seconds | Truncates to 0 |
+
+What the survey shows:
+
+- **Three of eleven already decide freshness at sub-second resolution**: Chromium, WebKit and Varnish. In those, the wire format is the coarsest part. Three more store a finer type and round to seconds before comparing.
+- **Five are whole seconds throughout.** For them the proposal is new work, not catching up. Firefox, nginx, Squid, Traffic Server and HAProxy are in this group.
+- **No implementation can be told a sub-second lifetime by an origin in a standard way.** Operators who want one today use private configuration. Varnish documents millisecond durations in VCL, and Fastly documents a duration type with an `ms` suffix. Cloudflare and CloudFront document a minimum of one second.
+- **Every cache sends `Age` in whole seconds**, including Varnish, which knows the fraction and discards it. This is the precision the proposal carries between tiers.
+- **A fractional `max-age` has four different outcomes** across these implementations: used, truncated to zero, directive ignored, or response not cached. That is the evidence for a separate companion with a valid base, and against decimal seconds.
+
+So the accurate statement is narrower than "implementations are already sub-second". Some widely used ones are, most are not, and none of them can agree on a sub-second lifetime because HTTP has no way to express one.
+
+Limits of the survey: it is a source read on one date, not a test. Not confirmed: Firefox's handling of a fractional value, how Traffic Server parses and formats `Age`, and whether Fastly's cache honours a sub-second lifetime. The CDN figures come from public documentation only.
+
+Sources: Varnish [`cache_rfc2616.c`](https://github.com/varnishcache/varnish-cache/blob/master/bin/varnishd/cache/cache_rfc2616.c), [VCL durations](https://varnish-cache.org/docs/trunk/reference/vcl.html) · Squid [`refresh.cc`](https://github.com/squid-cache/squid/blob/master/src/refresh.cc) · Traffic Server [`MIME.cc`](https://github.com/apache/trafficserver/blob/master/src/proxy/hdrs/MIME.cc) · HAProxy [`cache.c`](https://github.com/haproxy/haproxy/blob/master/src/cache.c) · Envoy [`cache_headers_utils.cc`](https://github.com/envoyproxy/envoy/blob/main/source/extensions/filters/http/cache/cache_headers_utils.cc) · httpd [`cache_util.c`](https://github.com/apache/httpd/blob/trunk/modules/cache/cache_util.c) · Souin [`pkg/rfc`](https://github.com/darkweak/souin/tree/master/pkg/rfc) · nginx [`ngx_http_upstream.c`](https://github.com/nginx/nginx/blob/master/src/http/ngx_http_upstream.c). Browser sources are listed in the next section.
+
+## Browsers
+
+Most HTTP is consumed by browsers, so this section states what the proposal asks of them, what it does not, and what objections to expect. It gives a summary across the three engines, then an assessment of each.
+
+The facts were read from each engine's source tree on 24 November 2026. They are a source read, not a test. Items we could not confirm are marked.
+
+### Summary
+
+- **Nothing is required of browsers.** A browser has no configured fine-age source, so under the draft it has no fine age and applies the whole-second base, exactly as it does today.
+- **Browser users still benefit.** The gain is at the CDN tiers. A page or player receives a fresher response from the edge without any browser change.
+- **A sender can keep browsers out of it entirely.** Put the fine policy in `CDN-Cache-Control` and an ordinary policy in `Cache-Control`. The browser then never sees a companion.
+- **Support is optional and can come later, or never.** Whether a private cache should use fine values at all is an [open question](#open-question-fine-values-in-a-private-cache).
+
+| | Chromium | Firefox | Safari (WebKit) |
+|---|---|---|---|
+| **Impact if the browser changes nothing** | None | None | None |
+| `max-age=0, max-age-ms=200` today | Stale at once; validates each use | Same | Same |
+| `max-age=1, max-age-ms=200` today | Fresh for one second | Fresh for under one second | Fresh for one second |
+| `Age-Ms` today | Not read | Not read | Not read |
+| `max-age=0.2` today (not proposed) | Network cache ignores the directive | Not checked | Used as 200 ms |
+| Time arithmetic | Microseconds | Whole seconds | Floating-point seconds |
+| Stored on disk | Times in microseconds; no stored expiry | Expiry in whole seconds | Timestamp in floating point |
+| Clock used for age | Wall clock | Wall clock | Wall clock |
+| Same-URL requests | Queue behind one fetch, up to 20 s | Wait for one revalidation, up to 20 s | No general coalescing found |
+| Request directives honoured | `no-cache`, `max-age=0` only | `max-age`, `min-fresh`, `max-stale` | `max-age`, `min-fresh`, `max-stale` |
+| `stale-while-revalidate` | Since Chrome 75 | Since Firefox 68 | Since Safari 14 |
+| Acts on `Retry-After` | A few internal services only | Not in the network stack | No handling found |
+| Cache partitioned by site | Since Chrome 86 | Since Firefox 85 | Yes |
+| Script timer resolution | 100 µs; 5 µs when isolated | 1 ms; 20 µs when isolated | 1 ms; 20 µs when isolated |
+| **Work to apply `max-age-ms`** | Small: parser | Large: parser, storage and every comparison | Small: parser |
+| **Work to keep a fine age** | Elapsed-time accounting | The above, plus elapsed-time accounting | Elapsed-time accounting and request delay |
+| **Most likely objection** | Two parsers to keep in step; little local benefit | Cost of leaving whole seconds | Already accepts a fraction; why a new name? |
+
+"Isolated" means cross-origin isolated. "Elapsed-time accounting" is the draft's rule that a cache relying on fine age accounts for time without interruption; all three use the wall clock today.
+
+### Chromium
+
+Covers Chrome. Browsers built on Chromium, such as Edge, share this network stack; we did not check them individually.
+
+**Today**
+
+- Freshness and age are computed in microseconds. Request and response times are stored on disk in microseconds. No expiry is stored; freshness is recomputed from the headers on each use.
+- The network cache matches the prefix `max-age=` and accepts digits only. `max-age-ms=200` is ignored. `max-age=0.2` is treated as absent, so the cache falls through to Expires or the heuristic.
+- The renderer has a second parser that reads the value as a floating-point number, so it appears to accept a fraction that the network cache rejects.
+- `Age` is parsed as an unsigned integer. `Age-Ms` is never read.
+
+**Local caching and concurrency**
+
+- One request per URL validates or fetches at a time. Others queue behind it, and several can share one network response. A queued request gives up after 20 seconds and goes to the network without the cache.
+- The renderer's in-memory cache reuses a resource regardless of headers while the document is loading. Responses to `fetch()` and XHR are not kept there, so they reach the HTTP cache and its freshness rules.
+- The back/forward cache keeps whole pages for up to ten minutes, independent of `max-age`. Speculative prefetch keeps responses for 300 seconds by default.
+- `stale-while-revalidate` forces a synchronous check 60 seconds after the first stale use.
+- Request `Cache-Control` is recognised only as `no-cache` or `max-age=0`. `min-fresh`, `max-stale` and other `max-age` values are ignored.
+- `Retry-After` is read for speculative prefetch, captive-portal detection and reliability reporting. We found no handling for navigation or `fetch()`.
+
+**If Chromium changes nothing**
+
+- No impact. A paired response behaves as its base says.
+- The request companions and `Retry-After-Ms` do nothing, as their bases do nothing today.
+
+**If Chromium chose to support it**
+
+- Applying `max-age-ms` is a parser change. The arithmetic and storage are already fine enough.
+- Both parsers would need the same rule, or the renderer and network cache would disagree on freshness.
+- A fine age needs more. Age is measured with the wall clock, and a backward step extends freshness. The draft's accounting rule is stricter than that.
+
+**Privacy**
+
+- `Cache-Control` is readable by cross-origin script, so `max-age-ms` would be visible. `Age-Ms` is not readable unless the server exposes it.
+- Script timers resolve 100 µs, or 5 µs when isolated, with jitter. Both are finer than the new field.
+
+**Assessment.** Lowest cost of the three and no risk from doing nothing. Expect "little local benefit" and "two parsers" as the objections.
+
+Sources: [`http_response_headers.cc`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/http/http_response_headers.cc) · [`http_response_info.cc`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/http/http_response_info.cc) · [`http_cache.h`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/http/http_cache.h) · [`http_cache_util.cc`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/http/http_cache_util.cc) · [`resource_fetcher.cc`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc) · [`http_parsers.cc`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/platform/network/http_parsers.cc)
+
+Not confirmed: that the renderer parser accepts a fraction end to end; any earlier Chromium discussion of sub-second lifetimes.
+
+### Firefox
+
+**Today**
+
+- All freshness arithmetic is in unsigned 32-bit whole seconds. The current time is the wall clock truncated to seconds. A source comment says the logic "can't have better resolution than seconds".
+- `max-age` is read as an integer. The tokenizer treats `max-age-ms` as one unknown word and ignores it. `Age` is read with `atoi`. `Age-Ms` is never read.
+- Because the clock is truncated, a `max-age=1` response is fresh for somewhere between zero and one second of real time. This is our inference from the code, not a test.
+- The cache entry's expiry is stored on disk as 32-bit seconds.
+
+**Local caching and concurrency**
+
+- An absent entry has one writer; other requests queue until it finishes. A stale entry gets one conditional request and the others wait.
+- A waiting request goes to the network after 20 seconds. A suspended writer is bypassed after 5 seconds. Navigations do not wait for a busy entry.
+- The image, stylesheet and script memory caches hold expiry in whole seconds. A stylesheet or script already loaded by the page is reused regardless of expiry.
+- `stale-while-revalidate` revalidation is dispatched at idle priority.
+- Request `max-age`, `min-fresh` and `max-stale` are honoured.
+- The network stack does not act on `Retry-After`. Application code such as Sync reads it. `Prefer` is only sent, as `Prefer: safe`.
+
+**If Firefox changes nothing**
+
+- No impact. A paired response behaves as its base says.
+- A sender choosing `max-age=1` as the base gets less than a second of local reuse in Firefox, as today.
+
+**If Firefox chose to support it**
+
+- This is real work: a millisecond deadline in the entry metadata, which is a format change or a new metadata element, and a change to every comparison that uses seconds, including the memory caches.
+- A sub-second stale window would often close before an idle-priority revalidation starts. This is our inference.
+- The request companions would be meaningful here, because Firefox honours their bases.
+- A fine age also needs elapsed-time accounting. Age uses the wall clock; a request time in the future is clamped.
+
+**Privacy**
+
+- Script timers resolve 1 ms by default, 20 µs when isolated, and 16.7 ms or coarser with fingerprinting resistance. At the default, the new field is no finer than the timer.
+
+**Assessment.** No risk from doing nothing, and the highest cost to support. Expect the objection to be that cost. The proposal should not depend on Firefox support, and does not.
+
+Sources: [`nsHttpResponseHead.cpp`](https://searchfox.org/firefox-main/source/netwerk/protocol/http/nsHttpResponseHead.cpp) · [`CacheControlParser.cpp`](https://searchfox.org/firefox-main/source/netwerk/protocol/http/CacheControlParser.cpp) · [`nsHttp.cpp`](https://searchfox.org/firefox-main/source/netwerk/protocol/http/nsHttp.cpp) · [`nsICacheEntry.idl`](https://searchfox.org/firefox-main/source/netwerk/cache2/nsICacheEntry.idl) · [`CacheEntry.cpp`](https://searchfox.org/firefox-main/source/netwerk/cache2/CacheEntry.cpp) · [`SharedSubResourceCache.h`](https://searchfox.org/firefox-main/source/layout/style/SharedSubResourceCache.h) · related test flakiness from whole-second granularity: [bug 1762147](https://bugzilla.mozilla.org/show_bug.cgi?id=1762147)
+
+Not confirmed: handling of a fractional `max-age`; back/forward cache rules; whether the cache index keeps its own copy of the expiry.
+
+### Safari and WebKit
+
+Safari's HTTP cache is WebKit's own network cache, which is open source. The system URL cache is switched off for web content. The transport underneath is closed source, and we cannot confirm that shipping Safari matches the public tree.
+
+**Today**
+
+- Freshness and age are computed in floating-point seconds. The disk cache stores its timestamp in floating point, without rounding.
+- `max-age`, `max-stale`, `min-fresh` and `stale-while-revalidate` are parsed as floating-point numbers. `max-age=0.2` is accepted as 200 ms, which the HTTP grammar does not allow. A fractional `Age` is accepted too.
+- `max-age-ms` matches no branch of the parser and is ignored. `Age-Ms` is never read.
+- Age excludes the request delay. The source comment reads "No compensation for latency".
+
+**Local caching and concurrency**
+
+- A subresource that is still loading is shared between requests in the same page. `fetch()` responses are not shared this way.
+- Background revalidations are de-duplicated per entry. We found no general coalescing of identical requests in the network cache.
+- The back/forward cache keeps pages on its own timer. History navigation may use stale entries.
+- `stale-while-revalidate` is on by default. Its tracking bug is currently reopened.
+- Request `max-age`, `min-fresh` and `max-stale` are honoured.
+- We found no handling of `Retry-After` or `Prefer` in the loader and network code.
+- Tracking prevention caps the cache lifetime of some resources at seven days. That is unaffected.
+
+**If WebKit changes nothing**
+
+- No impact. A paired response behaves as its base says.
+- WebKit remains the only engine we read that acts on a fractional `max-age`. Sites cannot rely on that elsewhere.
+
+**If WebKit chose to support it**
+
+- Applying `max-age-ms` is a parser change. Arithmetic and storage are already fine enough.
+- A fine age needs more: the request delay that RFC 9111 adds to age, and elapsed-time accounting. Age uses the wall clock only; records dated in the future are discarded, and we found no other guard.
+- Without request coalescing, several simultaneous `fetch()` calls for an expired entry may each go to the network. This is the one place we found where a short lifetime could multiply local requests. It is our inference from not finding coalescing, not a test.
+
+**Privacy**
+
+- Script timers resolve 1 ms, or 20 µs when isolated. At the default, the new field is no finer than the timer.
+
+**Assessment.** No risk from doing nothing, and a low cost to support. Expect the objection "we already accept a fraction". The answer is that no other implementation we read does the same with it.
+
+Sources: [`CacheValidation.cpp`](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/platform/network/CacheValidation.cpp) · [`NetworkCache.cpp`](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/NetworkProcess/cache/NetworkCache.cpp) · [`CachedResourceLoader.cpp`](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/loader/cache/CachedResourceLoader.cpp) · [`AsyncRevalidation.cpp`](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/NetworkProcess/cache/AsyncRevalidation.cpp) · [`NetworkSessionCocoa.mm`](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/NetworkProcess/cocoa/NetworkSessionCocoa.mm) · [stale-while-revalidate bug 201461](https://bugs.webkit.org/show_bug.cgi?id=201461)
+
+Not confirmed: behaviour of shipping Safari; suspend handling; how Safari's native HLS playback caches, which is handled by the system media stack.
+
+### What the three have in common
+
+- **No local stampede in Chromium and Firefox.** They serialise same-URL requests behind one fetch. A short lifetime means more validations over time, not a burst. WebKit is the exception noted above.
+- **Queued requests can outlive the lifetime.** A request that waited behind a slow fetch may find a 200 ms response already stale and fetch again. That is correct behaviour. A lifetime shorter than the fetch time gives no local reuse, as the [five-cache measurement](measurements.md) showed for a CDN.
+- **Sub-second lifetimes do not re-fetch page resources.** An image or script already used by the page is reused from memory whatever its lifetime. The companions matter only for resources fetched repeatedly by script, such as a live playlist read with `fetch()`.
+- **Retry-After-Ms asks nothing of browsers.** They barely act on Retry-After. Its audience is HTTP libraries and API clients.
+- **Media.** Players built on Media Source Extensions fetch playlists through `fetch()` or XHR and so use the HTTP cache.
+
+### Likely objections and answers
+
+| Objection | Answer |
+|---|---|
+| "We have no roadmap time for this." | None is needed. Deployment starts at origins and CDNs and does not wait for any browser. |
+| "A browser cache rarely reuses anything within a second. Where is the user benefit?" | Agreed for the local cache. The benefit reaches users through the CDN. We do not claim a browser-cache benefit. |
+| "Age from the network cannot be trusted." | The draft agrees. A cache without a configured source ignores `Age-Ms`, which is every browser by default. |
+| "Finer age is a timing side channel." | `Age-Ms` is not readable by cross-origin script unless the server exposes it. Caches are partitioned by site. Script timers already resolve 5 µs to 1 ms, and response timing reveals cache state today. |
+| "`max-age-ms` is visible to cross-origin script, because Cache-Control is safelisted." | True. It reveals a policy the sender chose to publish, as `max-age` does. A sender that minds uses a targeted field. |
+| "More validations cost battery and data." | The request rate is set by the page's script, not by the cache. With a base of zero, browsers already validate every use. |
+| "Another parser path to keep consistent and test." | Only for an engine that opts in. The proposal would need to bring web-platform tests for the HTTP cache with it. |
+| "A page could use tiny lifetimes to make users hammer a server." | A page can already do that with `no-cache` or a query string. The companion grants nothing new. |
+| "Why not `max-age=0.2`?" | Eleven implementations give it four different outcomes, and a strict parser may fall back to a heuristic lifetime far longer than intended. [Survey](#what-implementations-do-today) |
+
+### Why a browser might want it later
+
+- **Live playback in the page.** A player polling a playlist through `fetch()` could reuse a response across frames or workers of one site for a few hundred milliseconds. This is a hypothesis; we have not measured it.
+- **Developer tools.** Showing `Age-Ms` and `ttl-ms` in a network panel costs little and helps people debug CDN behaviour.
+- **Interoperable fractions.** One engine already accepts a fractional `max-age`. A defined companion gives sites a portable way to say the same thing.
+
+### Open question: fine values in a private cache
+
+The rule that limits fine age to a configured path suits a CDN. A browser has no such configuration, so today's draft gives its cache nothing. The options:
+
+| Option | Effect | Assessment |
+|---|---|---|
+| **Leave as is** (recommended for now) | Browsers apply the base. No change, no new risk. | Honest and cheap. The benefit stays in shared caches. |
+| Pessimistic age | A private cache without a trusted `Age-Ms` assumes the worst the whole-second Age allows: `Age: 0` means up to 999 ms. | Safe, but most sub-second lifetimes are then stale on arrival. |
+| Origin vouches for the path | Some signal that every cache on the path keeps fine age. | Most useful to browsers. Hard to make trustworthy: a secured connection and a consistent pair do not prove it. |
+
+We recommend leaving the draft as is and asking the browser teams whether they want more.
+
 ## Questions for the working group
 
+- **For browser implementers:** is "no change required, base applies" acceptable as the default? Would you want a private cache to use fine values, and under which of the options above?
 - Where do you need to communicate a fractional-second lifetime between independently implemented caches? What resolution does the application need?
 - How do you establish that every cache on a path updates age? Would the whole-second fallback work where you cannot establish that?
 - Should Retry-After and Prefer `wait` stay in this document or move to their own?
@@ -312,6 +547,8 @@ Writing `max-age=0.2` has no safe fallback. [RFC 9111 §4.2.1](https://www.rfc-e
 | Cache-Control parser | The value fails the delta-seconds grammar. RFC 9111 encourages treating a response with a non-integer max-age as stale. |
 | Targeted-field parser | The value parses as a Decimal. RFC 9213 says implementations should not consume a max-age with a decimal value. |
 | A recipient that truncates | Sees zero |
+
+Deployed implementations do all of these and more. Of the eleven we read, WebKit uses the fraction, four truncate to zero, four ignore the directive and nginx declines to cache the response. [Survey](#what-implementations-do-today)
 
 None of these lets the origin choose a one-second fallback. A separate companion leaves the base valid for every recipient.
 

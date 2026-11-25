@@ -52,9 +52,10 @@ informative:
 
 --- abstract
 
-HTTP caches express freshness lifetimes and response age in whole seconds.
+HTTP expresses freshness lifetimes and response age in whole seconds.
 An origin server can therefore ask for a response to be reused for zero
-seconds or for one second, with nothing in between. This document defines
+seconds or for one second, with nothing in between, although some widely
+deployed caches measure age more finely than that. This document defines
 millisecond companions for the cache directives that carry a duration, for
 the Age response header field and for the ttl parameter of Cache-Status. It
 also defines companions for the Retry-After header field and the wait
@@ -70,6 +71,16 @@ HTTP caching {{RFC9111}} measures time in whole seconds. Freshness lifetimes,
 the Age header field and the stale-while-revalidate window {{RFC5861}} all
 use the delta-seconds rule ({{Section 1.2.2 of RFC9111}}). The smallest
 non-zero freshness lifetime is one second.
+
+This limit is a property of the protocol elements. It is not a property of
+every implementation. Among eleven browser engines and caches whose source
+was examined in November 2026, three compared age with the freshness
+lifetime at sub-second resolution, three more stored times at a finer
+resolution and rounded them to seconds, and five used whole seconds
+throughout. Every cache among them generated the Age field in whole
+seconds, and an origin server has no standard way to state a sub-second
+lifetime to any of them. This document allows the protocol to carry the
+resolution that some implementations already have.
 
 Some resources change more often than that. A live HTTP Live Streaming media
 playlist {{RFC8216}} can change every second or two, and a player that
@@ -873,6 +884,36 @@ not require a finer Last-Modified field. Event-driven delivery or a blocking
 request can also avoid repeated polling. This extension does not replace
 those mechanisms.
 
+## User Agent Caches {#user-agents}
+
+This document requires no change to user agents.
+
+A cache in a user agent, such as a web browser, contacts many origin
+servers through paths that it does not administer. It usually has no
+configuration that identifies a fine-age source ({{receive}}). Such a cache
+has no fine age and applies the base directives as specified in
+{{RFC9111}}, whether or not it recognises the fine directives.
+
+A sender therefore chooses the base value knowing that user agents apply
+it ({{base-policy}}). A sender that wants the fine policy to apply only to
+the shared caches it has an arrangement with can place the fine directives
+in a targeted field ({{targeted}}) and send an ordinary policy in
+Cache-Control.
+
+User agents commonly keep responses in stores other than the HTTP cache,
+for example for the resources of a document that is being displayed or
+for navigation through session history. This document does not change
+when those stores reuse a response.
+
+A user agent that is configured for a particular deployment, for example
+an application that uses its own HTTP cache with a known set of servers,
+can be given a fine-age source in the same way as any other cache.
+
+Whether a private cache could establish a fine age without such
+configuration is an open issue. A recipient cannot derive a fine age
+from the Age field alone: `Age: 0` allows an age of up to 999
+milliseconds.
+
 ## Mixed Paths
 
 When a legacy cache is deployed between two implementing caches, the
@@ -1152,6 +1193,11 @@ Decimal seconds:
   parses as a Decimal, which {{Section 2.1 of RFC9213}} says
   implementations should not consume. Neither case lets the sender choose
   what a legacy cache does.
+  Existing implementations also differ. Among eleven browser engines and
+  caches whose source was examined in November 2026, a value of
+  `max-age=0.2` was used as 200 milliseconds by one, truncated to zero
+  by four and ignored as an invalid directive by four, and one declined
+  to store the response.
 
 Explicit units:
 : Companions such as `max-age-fine="1250ms"` could also express

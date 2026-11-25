@@ -75,13 +75,23 @@ Some resources change more often than that. A live HTTP Live Streaming media
 playlist {{RFC8216}} can change every second or two, and a player that
 receives an outdated playlist waits another reload interval before it
 discovers a new segment. An origin server that wants its caches to absorb
-request load for such a resource has to choose between no reuse and a
+request load for such a resource has to choose between immediate staleness and a
 lifetime comparable to the interval at which the resource changes.
 
-Whole-second age reporting has a second effect in multi-tier caches. A cache
-that has held a response for 900 milliseconds reports `Age: 0`. A downstream
-cache then starts counting from zero, and each tier can hold the response
-for up to the full lifetime again.
+HTTP already accounts for upstream age and request delay across cache tiers
+({{Section 4.2.3 of RFC9111}}); it does not grant a new lifetime at each
+tier. However, a whole-second Age value can lose the fractional part of an
+age estimate. A cache reporting an estimated age of 900 milliseconds as
+`Age: 0` cannot communicate those 900 milliseconds to the next cache.
+Repeated loss of precision can understate age along a path, depending on
+the clocks and age calculations in use. This document provides a way to
+carry that precision between independently implemented caches.
+
+Machine-driven clients, including agents that retrieve changing resources
+for language-model applications, can have the same need when many requests
+share a cacheable representation. This is a possible additional use case,
+not evidence of a measured benefit. Finer freshness does not make a response
+cacheable, change its cache key or authorise sharing private responses.
 
 This document defines a millisecond companion for each of the following:
 
@@ -109,8 +119,9 @@ Age-Ms: 175
 ~~~
 
 A downstream cache that implements this specification, and that is
-configured to rely on the sender's Age-Ms value, can reuse the response for
-the remaining 25 milliseconds. Any other cache applies `max-age=0`.
+configured to rely on the sender's Age-Ms value, has at most 25 milliseconds
+of freshness remaining before accounting for its request delay and local
+residence. Any other cache applies `max-age=0`.
 
 Finer resolution was raised in the HTTP Working Group in 2011, for sites
 that cache content for a couple of seconds. The response observed that a
@@ -194,6 +205,13 @@ range. Note that this is wider than the 31 bits suggested for delta-seconds
 in {{Section 1.2.2 of RFC9111}}. A 31-bit count of milliseconds overflows
 in less than 25 days.
 
+Parsing a value successfully does not imply that it can be converted to a
+platform's timer unit without overflow. Implementations need checked
+arithmetic when adding durations or converting them to finer units. A
+timer's range must not cause an age to wrap to a smaller value, a freshness
+lifetime or stale window to increase, or a retry delay to become shorter.
+The wire range is independent of an implementation's timer resolution.
+
 A value that does not match the delta-milliseconds rule is invalid. This
 includes a value with:
 
@@ -211,6 +229,22 @@ whole-second value that the recipient can use instead.
 
 Each fine directive takes an argument that uses the token form of the
 delta-milliseconds rule. A sender MUST NOT generate the quoted-string form.
+A recipient treats an argument in the quoted-string form as not matching
+the rule. This differs from the advice for existing directives in
+{{Section 5.2 of RFC9111}}. The base directive is always available, so a
+recipient needs only one form.
+
+A recipient MUST compare the complete directive name. Directive names in
+Cache-Control are case-insensitive ({{Section 5.2 of RFC9111}}), so
+`MAX-AGE-MS=200` is the max-age-ms directive. A name that only begins with,
+or contains, a name defined here is a different directive: `max-age-msx`
+is not max-age-ms, and max-age-ms is never read as max-age. The names of
+the Age-Ms and Retry-After-Ms fields are case-insensitive, as are all field
+names ({{Section 5.1 of RFC9110}}), and so is the wait-ms preference
+({{Section 2 of RFC7240}}). Structured Fields keys are lower case only
+{{RFC9651}}. That applies to a fine directive in a targeted field
+({{targeted}}) and to the ttl-ms parameter: a key in another case causes
+the field to fail to parse, and a recipient then ignores the whole field.
 
 A fine directive gives a complete duration. It is not added to the value of
 its base directive. For example, `max-age=1, max-age-ms=1250` describes a
@@ -331,13 +365,20 @@ following is true:
 - its base directive is absent from the same field, or is present with an
   invalid value;
 - its argument does not match the delta-milliseconds rule;
-- it appears more than once in the field with differing values; or
+- it appears more than once in the field; or
 - the cache has no fine age for the response, or for the stored response
   being considered for a request ({{fine-age}}).
 
 A cache that ignores a fine directive applies the remaining directives as
 specified in {{RFC9111}} and {{RFC5861}}. Ignoring a fine directive never
 causes its base directive to be ignored.
+
+Ignoring a fine directive restores the base policy. It does not necessarily
+reduce the permitted duration: `max-age=60, max-age-ms=200` permits 60
+seconds wherever the fine directive is not used. A sender MUST select base
+directives that it accepts whenever the fine directive or a fine age is
+unavailable. This includes the loss or rejection of the fields defined in
+this document at an intermediary.
 
 A fine directive does not relax any other directive. The no-store, no-cache,
 private, must-revalidate, proxy-revalidate and must-understand response
@@ -407,6 +448,18 @@ These requirements apply to every response in which the cache generates an
 Age header field. That includes a 304 (Not Modified) response that the
 cache generates from a stored response.
 
+An implementing cache that forwards a response without serving it from
+storage, and has a fine age for it, SHOULD likewise generate both fields.
+A downstream cache obtains no fine age from a cache's response that lacks
+them ({{receive}}).
+
+A cache MAY omit Age-Ms, for example where downstream recipients do not
+need fine age ({{security}}). A downstream cache then applies the base
+directives. A cache that reports a coarser age than it holds MUST round the
+age up, and MUST derive Age and Age-Ms from the same rounded estimate. For
+example, an age of 999 milliseconds rounded up to a 10 millisecond step is
+sent as `Age-Ms: 1000` with `Age: 1`.
+
 An origin server does not generate Age-Ms.
 
 ## Receiving Age-Ms {#receive}
@@ -426,18 +479,38 @@ established by configuration, for example between the tiers of a content
 delivery network under common administration. This document defines no
 mechanism to discover it.
 
-When a response is received from a fine-age source, the cache determines a
-fine age_value as follows:
+The configuration MUST cover the complete path that serves the response
+back to the origin server. That includes every cache or intermediary that
+can retain or rewrite age metadata, and any alternative path used after a
+failover. The consistency of Age and Age-Ms does not establish that this
+condition holds, and neither does a secured connection to the sender. An
+implementing cache MUST NOT rely on fine age for a path whose accounting
+properties are unknown.
 
-1. If the response contains neither an Age nor an Age-Ms field, the fine
-   age_value is zero.
+The configuration also identifies whether the sender is an origin server
+or an implementing cache. When a response is received from a fine-age
+source, the cache determines a fine age_value as follows:
 
-2. If the response contains exactly one Age field line and exactly one
-   Age-Ms field line, both are valid, and the Age value is equal to the
-   Age-Ms value divided by 1000 and rounded down, the fine age_value is the
-   Age-Ms value.
+1. If the sender is an origin server and the response contains neither an
+   Age nor an Age-Ms field, the fine age_value is zero.
+
+2. If the sender is an implementing cache, the response contains exactly
+   one Age field line and exactly one Age-Ms field line, both are valid,
+   and the Age value is equal to the Age-Ms value divided by 1000 and
+   rounded down, the fine age_value is the Age-Ms value.
 
 3. Otherwise, the response has no fine age_value.
+
+The zero value in the first case relies on the configuration: the response
+was generated or successfully validated at the origin server for this
+exchange. The absence of the fields does not establish that by itself, so
+a response without them from an implementing cache has no fine age_value.
+This document does not authenticate the time of generation or validation.
+
+A recipient applies the second case to the complete field values as
+received, before any recovery that discards additional Age members
+({{Section 5.1 of RFC9111}}). When the response has no fine age_value,
+that recovery remains available for the Age field.
 
 When a response is received from any other sender, or has no fine
 age_value, the cache has no fine age for that response. It processes the
@@ -464,6 +537,10 @@ A cache MAY generate ttl-ms when it has a fine age for the response
 generates ttl-ms MUST also generate ttl in the same list member, and
 derives both from the same calculation.
 
+The ttl value MUST equal the ttl-ms value divided by 1000 and rounded
+towards negative infinity. For example, `ttl-ms=-1` is accompanied by
+`ttl=-1`, and `ttl-ms=25` is accompanied by `ttl=0`.
+
 Like the other Cache-Status parameters, ttl-ms describes how a cache
 handled a request. A recipient does not use it to calculate freshness.
 
@@ -474,8 +551,9 @@ handled a request. A recipient does not use it to calculate freshness.
 A cache has a fine age for a stored response when:
 
 - it obtained a fine age_value for the response ({{receive}}); and
-- it has measured the time since the corresponding request with a
-  resolution of one millisecond or better, without interruption.
+- it can account for the elapsed time since the corresponding request
+  without interruption, using the rounding rule below when its clock has
+  a resolution coarser than one millisecond.
 
 The fine age is calculated as described in {{Section 4.2.3 of RFC9111}},
 with all quantities in milliseconds:
@@ -492,8 +570,10 @@ Date header field, which has a resolution of one second. A cache MAY omit
 it when calculating a fine age for a response from a fine-age source.
 
 A cache SHOULD use a monotonic clock to measure response_delay and
-resident_time. If a cache can no longer account for the whole of the time
-since the request, it no longer has a fine age for the response. A stored
+resident_time. The accounting MUST include time during which the cache was
+not running or the system was suspended; a clock being monotonic does not
+establish that it counts that time. If an event makes the accounting
+uncertain, the cache MUST cease to rely on the affected fine age. A stored
 response does not gain freshness as a result of such an event. In
 particular:
 
@@ -503,6 +583,8 @@ particular:
   response whose elapsed time was measured with that clock.
 - A restart loses the fine age unless the cache has recorded enough to
   account for the time it was not running.
+- A restore of older clock or cache state, such as a virtual machine
+  snapshot, loses the fine age of the affected responses.
 
 A cache whose clock has a coarser resolution than one millisecond MUST
 round each age up, and each lifetime and stale window down, to that
@@ -606,6 +688,19 @@ A recipient that implements this specification uses a valid Retry-After-Ms
 value in place of the Retry-After value. It MUST ignore Retry-After-Ms when
 the Retry-After field is absent or invalid.
 
+A recipient MUST also ignore Retry-After-Ms if either field occurs on more
+than one field line, or its combined value is not a valid non-negative Integer
+Item. Unrecognised Item parameters are ignored. Header field order does
+not affect the selection; the recipient evaluates the pair after receiving
+the header section for that response. A pair from an informational response,
+a redirect or a previous request is not a pair for a later response.
+
+Retry-After-Ms does not require a follow-up request or authorise the
+automatic replay of a request. It does not replace a recipient's own limits
+on attempts, concurrency or total elapsed time. A recipient can wait for
+longer, or abandon the retry. Any delay that a recipient adds, including
+random delay, MUST NOT cause a retry earlier than the selected delay.
+
 Retry-After-Ms carries a delay and has no form that carries a date. This
 document defines no means of accounting for time that the response spent
 in transit or in a cache.
@@ -632,6 +727,12 @@ recognise wait-ms ignores it ({{Section 2 of RFC7240}}) and can apply wait.
 A server that implements this specification uses a valid wait-ms value in
 place of the wait value, and ignores wait-ms when wait is absent.
 
+A server MUST ignore wait-ms if wait has an invalid value or wait-ms does
+not match its grammar. Duplicate preferences are processed as specified in
+{{Section 2 of RFC7240}}. The preference does not establish an end-to-end
+request deadline or change the client's transport timeouts. It does not
+oblige a server to hold resources for the requested duration.
+
 # Deployment Considerations
 
 ## Choosing the Whole-Second Policy {#base-policy}
@@ -641,10 +742,12 @@ fine directives applies the base directives. This includes implementing
 caches that have no fine age. The base values therefore decide what happens
 on any path that is not under the sender's control.
 
+For the max-age and s-maxage response directives, the choice is:
+
 | Base value | Effect at a cache that applies the base directive |
 |------------|---------------------------------------------------|
-| 0          | The directive grants no time. Reuse is limited to implementing caches on configured paths. |
-| 1 or more  | The cache can hold the response for that many seconds in addition to any time spent upstream, as it does today. |
+| 0          | No fresh lifetime. The response can be stored and validated; stale reuse requires separate permission. |
+| 1 or more  | The cache applies the whole-second duration, accounting for upstream age as specified in RFC 9111. |
 
 A sender that requires sub-second freshness and cannot accept more sends a
 base value of zero. A sender that can accept a full second at legacy caches
@@ -658,6 +761,51 @@ For example, `max-age=0, max-age-ms=500` causes a legacy cache to validate
 its stored response, and `max-age=1, max-age-ms=500` allows a legacy cache
 to use a response that is up to one second old.
 
+## Mismatched Values {#mismatch}
+
+The two values of a pair are independent ({{pairing}}). A recipient
+therefore cannot distinguish a deliberate difference from a mistake, and
+applies whichever value it uses as written. The following table shows what
+a sender obtains.
+
+| Pair | Caches that use the fine directive | All other caches |
+|------|-----------------------------------|------------------|
+| `max-age=0, max-age-ms=200` | 200 milliseconds | No fresh lifetime |
+| `max-age=1, max-age-ms=200` | 200 milliseconds | One second |
+| `max-age=1, max-age-ms=2000` | Two seconds | One second |
+| `max-age=60, max-age-ms=200` | 200 milliseconds | 60 seconds |
+| `max-age=0, max-age-ms=86400000` | One day | No fresh lifetime |
+
+A base value much larger than its companion is the case most likely to be
+a mistake, for example when a companion is added to an existing field
+without lowering the base. Most caches then hold the response for the
+longer time. Before deploying a pair, a sender is advised to confirm that
+it accepts the base value from every cache.
+
+A mistake of unit has a similar effect. Sending `max-age-ms=300` where 300
+seconds was intended reduces the lifetime a thousandfold at the caches that
+use it, and increases the request rate at the origin server to match. A
+cache cannot detect this. The same exposure exists today when a sender
+generates `max-age=0` in error.
+
+This document does not require the two values to be consistent. Such a
+rule would prevent a sender from choosing a fallback that differs from the
+fine policy, which is the purpose of the base value.
+
+## Rewriting Policy at an Intermediary {#rewriting}
+
+An intermediary that changes a duration to enforce a local policy might
+not recognise its companion. For example, a gateway that rewrites
+`max-age=3600, max-age-ms=3600000` to `max-age=0, max-age-ms=3600000`
+leaves a policy that an implementing cache reads as one hour.
+
+An intermediary that intentionally changes a duration to enforce a local
+policy SHOULD also examine its companion in the same field, and remove or
+replace the companion if retaining it would defeat that policy. The same
+applies to targeted fields ({{targeted}}) and to the pairs in {{non-cache}}.
+This does not require an intermediary to alter fields that it otherwise
+forwards.
+
 ## Choosing a Lifetime {#choosing}
 
 One millisecond is the resolution of the companions. It is not a
@@ -668,9 +816,10 @@ limit:
   round trip mostly waiting for the origin server. A lifetime of several
   round trips is needed before most requests are answered from the cache.
 - A stale-while-revalidate-ms window allows a cache to answer requests
-  while one validation is in progress. A window shorter than the validation
-  does not help, because requests that arrive after it ends wait for the
-  validation to complete.
+  during validation when stale reuse is permitted. A window shorter than
+  the validation can help requests that arrive within it, but requests
+  after it ends might block. Operators should size it for the validation
+  latency distribution, including queueing and failures.
 - Timer granularity and scheduling delay on a loaded host can amount to
   several milliseconds. The rounding rule in {{fine-age}} ensures that such
   delay shortens reuse and never extends it.
@@ -687,6 +836,43 @@ allows up to five times as many validations from each cache. Operators are
 advised to measure the request rate at each tier when shortening a
 lifetime.
 
+## Synchronised Refreshes {#synchronised}
+
+A shorter lifetime does not spread requests over time. Clients following
+the same publication schedule, or caches expiring a popular response at
+the same instant, can produce bursts of validation requests. A
+stale-while-revalidate window can hide validation latency from clients but
+does not itself ensure that requests are collapsed within a cache or
+coordinate refreshes at independent caches.
+
+Implementations can collapse concurrent requests for the same eligible
+stored response ({{Section 4 of RFC9111}}) and can start a validation before
+freshness expires. A cache can vary when it starts that validation, without
+extending the permitted freshness lifetime or stale window. Any such
+scheduling needs to preserve cache-key and authorisation boundaries and
+avoid unbounded speculative requests. This document defines no scheduling
+algorithm, client cohort or jitter field.
+
+Early validation does not guarantee a newer representation. If it reaches
+the origin before the next publication, a 304 can renew the freshness of
+the old representation and delay discovery of that publication.
+
+## Application Timeliness {#timeliness}
+
+A freshness lifetime bounds reuse without validation; it is not a guarantee
+about when the origin publishes new information or when a client receives
+it. A successfully validated representation can have an old application
+timestamp. Transport, response-body transfer, player reload rules and
+processing add further delay. A fine stale window permits further reuse
+and therefore contributes to the application's tolerated delay.
+
+Applications that require a particular publication or sequence number need
+an application mechanism for expressing that requirement. Sub-second
+changes to a representation can be distinguished with entity tags; they do
+not require a finer Last-Modified field. Event-driven delivery or a blocking
+request can also avoid repeated polling. This extension does not replace
+those mechanisms.
+
 ## Mixed Paths
 
 When a legacy cache is deployed between two implementing caches, the
@@ -695,41 +881,148 @@ downstream cache then applies the base directives and removes any Age-Ms
 field ({{receive}}). Fine age reporting resumes at the next cache that
 obtains the response from a fine-age source.
 
-# Security Considerations
+If the downstream cache is wrongly configured to treat that path as a
+fine-age source, the legacy cache can reuse the response under the base
+directives while forwarding the Age-Ms value it received. The downstream
+cache then underestimates the age by up to the time the legacy cache held
+the response. For a legacy cache that follows the base directives, they
+and any stale permissions determine that time, which is a reason to
+choose a base lifetime of zero when the path is not fully known
+({{base-policy}}).
+
+# Security Considerations {#security}
 
 The considerations of {{Section 7 of RFC9111}} apply.
 
-An Age-Ms value that understates the age of a response can cause a cache to
-reuse the response for longer than the origin server intended. The excess
-is bounded. A cache that relies on the value reuses the response for no
-longer than the fine freshness lifetime after receiving it, which is what
-it would do for a response that arrived with an age of zero. A party that
-can alter Age-Ms but not the cache directives cannot extend reuse at a
-cache beyond the lifetime that the origin server chose.
+This document adds finer durations and a finer age. It adds no authority:
+a fine directive does not relax a restriction on storing or sharing a
+response ({{pairing}}), and each fine value has a whole-second base that
+its sender has to accept. What it does add is age metadata that a cache
+acts on and that is not authenticated. The subsections below state what
+can go wrong, what limits it, and what remains.
 
-{{receive}} further limits the exposure by requiring configuration
-before the field is used, and by requiring an implementing cache to remove
-a value that it did not use. The consistency check in {{receive}} detects
-some errors but is not a defence against a sender that generates a
-plausible pair of values.
+## Understated Age {#sec-age}
+
+An Age-Ms value that understates the age of a response can cause a cache to
+reuse the response for longer than the origin server intended. This can
+result from a legacy cache that forwards a stored Age-Ms unchanged, from a
+path that changes after configuration, or from a sender that lies.
+
+The exposure is limited as follows:
+
+- A cache uses Age-Ms only from a sender that it has been configured to
+  treat as a fine-age source, and the configuration has to cover the
+  complete path ({{receive}}). The default is the behaviour of {{RFC9111}}.
+- A cache removes an Age-Ms value that it did not use, so that an
+  unreliable value does not travel further ({{receive}}).
+- An inconsistent pair of age values is not used. This detects some
+  errors, including a legacy cache that has updated Age past a second
+  boundary.
+- For each receipt, the remaining fresh reuse at that cache is at most the
+  selected fine freshness lifetime, less the accounted request delay.
+
+What remains: the last item is not a bound on the response's actual age or
+on its total time across a path. Successive false age samples can
+repeatedly conceal upstream time, and any permitted stale reuse adds its
+own window. A consistent pair, a secured connection to the sender, an
+entity tag or a Last-Modified value does not show that the path accounted
+for age correctly. A cache can impose local limits on reuse; they reduce
+the exposure but do not authenticate an upstream age. A fine-age source
+that lies is not defended against, as a cache that sends a false Age is not
+defended against today.
 
 An Age-Ms value that overstates the age causes additional validation
 requests, as an overstated Age value does today.
 
+## Loss of Fine Metadata {#sec-fallback}
+
+An attacker or a fault that removes Age-Ms, or invalidates a fine
+directive, causes the base policy to apply. This is not always the more
+restrictive outcome: `max-age=60, max-age-ms=200` then permits 60 seconds.
+
+This grants nothing that the sender did not send. The sender is required to
+choose a base that it accepts on every path ({{pairing}}), and a legacy
+cache applies that base in any case. A sender that cannot accept more than
+its fine lifetime sends a base of zero ({{base-policy}}). A base of zero
+still permits storage and validation; a sender that needs neither uses
+no-store or no-cache as it does today.
+
+Removing both age fields does not make a response appear new to a cache
+that receives it from another cache: a missing pair from a cache gives no
+fine age ({{receive}}).
+
+## Rewritten Policy {#sec-rewrite}
+
+An intermediary that lowers a duration to enforce a local policy, and does
+not recognise the companion, leaves a fine value that an implementing cache
+downstream will use ({{rewriting}}). The caches cannot detect this. It is
+contained only by updating the enforcement point, or by that point removing
+directives it does not recognise. It affects only downstream caches that
+have been configured to use fine age.
+
+## Unusual Values {#sec-values}
+
+Mismatched, malformed and extreme values have defined outcomes
+({{pairing}}, {{mismatch}}, {{examples}}). An invalid fine value never
+invalidates its base, and a fine directive without its base is never used.
+Names are compared in full ({{directives}}), so a fine directive is not
+mistaken for its base or the reverse.
+
+The largest value is fifteen digits, about 31,700 years in milliseconds.
+A long lifetime chosen by an origin server for its own response is an
+existing capability. Implementations need checked arithmetic when
+converting or adding values ({{delta-ms}}); a result that would overflow
+is not a reason to lengthen reuse.
+
+## Clocks {#sec-clocks}
+
+A fine age depends on elapsed time measured at each cache. A clock step, a
+suspend, a restart or a restored snapshot can make a stored response appear
+younger than it is. {{fine-age}} requires a cache to account for that time
+or to stop relying on the affected fine age, after which the base policy
+applies.
+
+What remains: an implementation cannot detect every such event. A restore
+that also rolls back the state used for detection is an example. The same
+events affect whole-second ages today; with sub-second lifetimes a given
+error is a larger multiple of the lifetime.
+
+## Load {#sec-load}
+
 Short lifetimes can be used to increase load on an origin server or on an
-upstream cache. This is already possible with a lifetime of zero. In the
-same way, a fine request directive does not let a client cause more
-validation than `max-age=0` does.
+upstream cache, and synchronised expiry can sharpen bursts
+({{synchronised}}). This is already possible with a lifetime of zero, so a
+fine lifetime does not add to what a sender can cause. In the same way, a
+fine request directive does not let a client cause more validation than
+`max-age=0` does, and a cache can ignore request directives under local
+policy as it can today.
+
+## Retry and Wait Hints {#sec-retry}
 
 A small Retry-After-Ms value invites frequent retries. A server chooses the
-value, as it does for Retry-After.
+value, as it does for Retry-After, which can already be zero. The hint does
+not require or authorise a retry, and a recipient keeps its own minimum
+delay and its limits on attempts, concurrency and total time ({{retry}}).
+The wait-ms preference does not oblige a server to hold resources
+({{wait}}).
+
+## Privacy {#sec-privacy}
 
 Age-Ms reveals the time a response has spent in caches with finer
 resolution than Age. Together with fields such as Cache-Status {{RFC9211}},
 this can make it easier for an observer to infer when other clients
 requested the same resource, which adds to the timing attacks described in
-{{Section 7.2 of RFC9111}}. Operators can remove the field at a trust
-boundary.
+{{Section 7.2 of RFC9111}}. The ttl-ms parameter exposes the same timing.
+
+The observer has to receive the fields, or be able to obtain comparable
+responses from the same shared cache. A cache can omit Age-Ms
+({{generate}}) and withhold ttl-ms where downstream recipients do not need
+them; a cache that coarsens age rounds it up, so that privacy handling
+never understates age. Omitting Age-Ms while still sending ttl-ms leaves
+the finer timing visible.
+
+What remains: neither the finer fields nor their omission guarantees
+privacy. Response timing itself can reveal cache state, as it does today.
 
 # IANA Considerations
 
@@ -806,6 +1099,10 @@ that no other directive restricts reuse.
 | `max-age=0, max-age-ms=200` | Fresh at 199 ms. Stale at 200 ms. |
 | `max-age=1, max-age-ms=1250` | Fresh at 999 ms, 1000 ms and 1249 ms. Stale at 1250 ms. |
 | `max-age=1, max-age-ms=0` | Stale immediately. |
+| `max-age=60, max-age-ms=200` | Fresh at 199 ms. Stale at 200 ms. The values are independent. |
+| `max-age=1, max-age-ms=2000` | Fresh at 1999 ms. Stale at 2000 ms. |
+| `max-age=0, max-age-ms=0200` | Leading zeros are permitted. The lifetime is 200 ms. |
+| `max-age=0, max-age-ms="200"` | The fine directive is ignored. The response is stale immediately. |
 | `max-age-ms=200` | The fine directive is ignored because max-age is absent. Freshness is determined by {{RFC9111}}. |
 | `max-age=1, max-age-ms=0.2` | The fine directive is invalid and is ignored. The lifetime is one second. |
 | `max-age=1, max-age-ms=200, max-age-ms=300` | The fine directive is ignored. The lifetime is one second. |
@@ -829,14 +1126,19 @@ that has a freshness lifetime of 2000 milliseconds.
 The following table shows an implementing cache receiving a response from
 a sender that it is configured to treat as a fine-age source.
 
-| Received | Fine age_value |
-|---|---|
-| No Age and no Age-Ms | 0 |
-| `Age: 0` and `Age-Ms: 175` | 175 ms |
-| `Age: 1` and `Age-Ms: 1075` | 1075 ms |
-| `Age: 1` and `Age-Ms: 175` | None. The values are inconsistent. |
-| `Age: 0` only | None |
-| `Age-Ms: 175` only | None |
+| Sender | Received | Fine age_value |
+|---|---|---|
+| Origin server | No Age and no Age-Ms | 0 |
+| Origin server | `Age: 0` and `Age-Ms: 175` | None. An origin server does not generate these. |
+| Cache | No Age and no Age-Ms | None. Absence does not show an exchange with the origin server. |
+| Cache | `Age: 0` and `Age-Ms: 175` | 175 ms |
+| Cache | `Age: 1` and `Age-Ms: 1075` | 1075 ms |
+| Cache | `Age: 1` and `Age-Ms: 175` | None. The values are inconsistent. |
+| Cache | `Age: 0` only | None |
+| Cache | `Age-Ms: 175` only | None |
+| Cache | `Age: 1, 5` and `Age-Ms: 1075` | None. Age recovery under RFC 9111 still applies. |
+| Cache | `Age: 0` and `Age-Ms: 175;tag="a,b"` | 175 ms. The comma is inside a parameter, which is ignored. |
+| Cache | `Age: 0` and `AGE-MS: 175` | 175 ms. Field names are case-insensitive. |
 
 # Alternatives Considered {#alternatives}
 
@@ -904,11 +1206,15 @@ It does not yet implement the fine directives in targeted fields, or the
 max-stale-ms and stale-if-error-ms request directives. It forwards
 Retry-After-Ms and wait-ms without acting on them.
 
-The prototype differs from this document in two ways. It records the time
-a response was stored using a wall clock, so a step of that clock changes
-the fine age instead of discarding it ({{fine-age}}). It applies a fine
-stale window only to a response whose freshness lifetime comes from max-age
-or s-maxage, and not to one whose lifetime comes from Expires.
+The prototype differs from this document in three ways. It records the time
+a response was stored using a wall clock, and discards the fine age when
+the difference between that clock and a monotonic clock moves by more than
+10 milliseconds, or after a restart. It does not detect a smaller step, or
+a restored snapshot that rolls both clocks back together ({{fine-age}}).
+It applies a fine stale window only to a response whose
+freshness lifetime comes from max-age or s-maxage, and not to one whose
+lifetime comes from Expires. It rejects an Age-Ms value that carries
+parameters, where this document ignores the parameters.
 
 # Acknowledgements
 {:numbered="false"}

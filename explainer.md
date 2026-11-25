@@ -10,6 +10,8 @@ Dave Seddon · Discussion proposal for the HTTP Working Group · [Internet-Draft
 - **Rollout.** The origin sends a whole-second fallback with every companion. Older caches use the fallback.
 - **Measured.** Through five nginx caches, responses under `max-age=1` averaged 999 ms behind the origin, and 48 ms under `max-age-ms=100`. [Practical tests](measurements.md)
 
+HTTP already carries upstream age across cache tiers. A new lifetime at each tier is not its intended behaviour. The proposal adds a sub-second lifetime and preserves fractional age on a configured path; it does not repair arbitrary Age handling or guarantee the age of the underlying application data. [RFC 9111 §4.2.3](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.3)
+
 ## Sharing a freshness lifetime
 
 Our live HLS playlists change every second or two. Suppose the origin chooses a 200 ms freshness lifetime. A shield serving the playlist at age 175 ms can report only `Age: 0` in whole seconds. We propose that it send these fields together.
@@ -143,9 +145,49 @@ Make the same decision independently for the stale window.
 
 ## Operational and security considerations
 
-- **Origin load.** Short lifetimes can increase it. [RFC 5861 §5](https://www.rfc-editor.org/rfc/rfc5861.html#section-5)
+The draft's Security Considerations section takes each of these in turn. The short version: the extension adds no authority. Every fine value rides on a whole-second base the sender must accept, and a cache uses fine age only where it has been configured to.
+
+| Concern | What limits it | What remains |
+|---|---|---|
+| **A false or replayed Age-Ms** makes a response look young | Used only from a configured source, over a fully configured path. Unused values are removed. Inconsistent pairs are rejected. Off by default. | A configured source that lies, or a path that changes after configuration. The same is true of Age today. |
+| **Stripping the fine fields** | The base applies, which the sender chose and legacy caches use anyway. A missing pair from a cache is never read as age zero. | The base can be longer than the fine value. A sender that cannot accept that sends a base of zero. |
+| **A gateway rewrites the base only** | The draft asks rewriters to examine the companion. | An unaware gateway. Affects only caches configured for fine age. |
+| **Malformed, mismatched or huge values** | Each has a defined outcome. An invalid companion never invalidates its base. Names are matched in full. | A sender's own mistakes, such as a unit slip. |
+| **Clock steps, suspend, snapshots** | A cache must account for the time or stop relying on fine age. The prototype refetches after a restart, a suspend or a wall-clock step over 10 ms. | Events a cache cannot detect, such as a snapshot restore that rolls back every clock. |
+| **Origin load** | No more than `max-age=0` allows today. [RFC 5861 §5](https://www.rfc-editor.org/rfc/rfc5861.html#section-5) | Short lifetimes still cost origin requests. See the [measurements](measurements.md). |
+| **Tiny retry delays** | Retry-After can already be zero. Clients keep their own minimum and limits. | A client with no limits of its own. |
+| **Privacy**: finer timing reveals cache activity | A cache can omit Age-Ms and `ttl-ms` at a boundary. Coarsened age rounds up. [RFC 9211 §6](https://www.rfc-editor.org/rfc/rfc9211.html#section-6) | Response timing itself, as today. |
+
 - **Stale window.** It helps when a request arrives during the window and validation completes in time. It cannot guarantee an uninterrupted stream.
-- **Privacy.** Fine age and per-tier diagnostics reveal cache activity at higher resolution. Operators can limit their exposure across trust boundaries. [RFC 9211 §6](https://www.rfc-editor.org/rfc/rfc9211.html#section-6)
+- **Tested.** The [mistakes and misconfigurations](#mistakes-and-unlikely-inputs) in Appendix B have defined outcomes, and most are measured or covered by the prototype's tests.
+
+### Designing for another thirty years
+
+The useful long-term property is a stable duration unit with explicit fallback, rather than a prediction about how fast future machines will run. Keep integer milliseconds, the existing 15-digit range and the distinction between timestamps, elapsed age, freshness and scheduling. Do not change the meaning of an existing field. A future finer unit would need its own demonstrated use case, range and precedence rules; no microsecond or nanosecond field is proposed now.
+
+The range is a wire-format property, not a recommendation to retain responses for millennia. A signed 64-bit integer can store it, but blindly multiplying the maximum millisecond value by a million to produce nanoseconds overflows that integer. Timer conversions and sums need checked arithmetic. Coarse timers should reduce reuse, not silently lengthen it.
+
+Clock resets, restarts, multi-tier trust, conditional validation, cache-key selection and private responses will still matter even if hardware becomes faster. Millisecond freshness also does not alter HLS player reload rules or create a strict end-to-end publication deadline.
+
+### Agents and LLM applications
+
+An agent fleet retrieving the same changing, cacheable resource could use a shared 100–500 ms budget to absorb repeated reads. That is a workload hypothesis to test, not a measured benefit or a claim that agents require polling. Event delivery, blocking requests and longer cache lifetimes can be better choices. Authorisation and `Vary` still determine who may share a response. Prompt caching, semantic similarity caches and generated POST responses are separate problems; this proposal does not make them reusable.
+
+### Spreading the race at the live edge
+
+Freshness precision and refresh scheduling solve different problems. Lowering a lifetime can make a synchronised burst happen more often. Stale-while-revalidate permits bounded stale responses during refresh; it does not by itself collapse concurrent requests or spread refreshes across independent caches. Request collapsing and a shield help with those bursts. [RFC 9111 §4](https://www.rfc-editor.org/rfc/rfc9111.html#section-4) · [RFC 5861 §3](https://www.rfc-editor.org/rfc/rfc5861.html#section-3)
+
+One exploratory option is bounded probabilistic early revalidation: within the last part of an existing freshness lifetime, select a small number of requests to start a refresh, collapse competing work for that cache key, and let other clients use the still-permitted response. This needs no extra stale permission. Never randomise expiry past the freshness or stale limits, restart a stale window, or reset Age merely because a refresh has started. Published probabilistic early-expiration algorithms are useful prior art. [Vattani, Chierichetti and Lowenstein, 2015](https://cseweb.ucsd.edu/~avattani/papers/cache_stampede.pdf)
+
+Dave's suggested 0.01% pioneer cohort amounts to 100 viewers out of one million. However, a pioneer helps other viewers only when they share the same cache key and cache. At a small edge or a personalised playlist, there may be no pioneer in a publication interval. A cache-level selection can adapt to the local request rate without exposing viewer identities or creating extra cache variants. These are experiment ideas, not proposed protocol fields.
+
+An early refresh can also be too early: a 304 just before publication renews the old representation's freshness and can postpone discovery. Compare refresh jitter against publication-aware requests and LL-HLS blocking playlist reload. A pioneer cannot obtain an unpublished segment. [Apple's blocking playlist reload explanation](https://developer.apple.com/videos/play/wwdc2020/10231/)
+
+For retries, any random delay belongs after the selected Retry-After minimum; subtracting jitter would invite requests before the server's requested wait. Retry scheduling should remain separate from cache expiry.
+
+### Where curl fits
+
+libcurl does not maintain an HTTP representation cache. An application can already send the companion request directives and read the response fields through its existing header APIs. Consequently, the cache prototype belongs in nginx and other caches; libcurl is useful for a second implementation of Retry-After-Ms and for client examples. `CURLINFO_RETRY_AFTER` currently returns seconds and should retain those units; a millisecond result needs a distinct API or an application-level adapter. [curl's cache inventory](https://everything.curl.dev/internals/caches.html) · [curl_easy_header](https://curl.se/libcurl/c/curl_easy_header.html) · [CURLINFO_RETRY_AFTER](https://curl.se/libcurl/c/CURLINFO_RETRY_AFTER.html)
 
 ## Questions for the working group
 
@@ -203,6 +245,43 @@ These are suggested outcomes. They assume a trustworthy age estimate, and that s
 | Lifetime 25 ms on a 100 ms clock | Round durations down and age up. Rounding this lifetime up to 100 ms could permit 75 ms of unintended reuse. If the cache cannot establish freshness, validate. RFC 9111 already takes the earlier time when a cache's clock is coarser than an Expires date. [RFC 9111 §4.2](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2) |
 | 304 after validation | Update stored metadata and recalculate age from the validation exchange. Discard the previous fine-age sample. If the 304 replaces a policy field, use only pairs in the replacement. [RFC 9111 §4.3.4](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.4) |
 | Concurrent requests or a slow origin | Collapse validations for the same response where possible. Measure origin requests, validation latency and manifest age by tier. Once the stale window expires, an unfinished validation gives no permission to serve stale. [RFC 9111 §4](https://www.rfc-editor.org/rfc/rfc9111.html#section-4) |
+
+### Mistakes and unlikely inputs
+
+Most of these would be accidents. Each has a defined outcome, and the prototype's tests cover the ones marked ✓. [Measured examples](measurements.md#test-6-mismatched-and-malformed-pairs)
+
+| Input | Likely cause | Outcome | Why |
+|---|---|---|---|
+| `max-age=60, max-age-ms=200` ✓ | Companion added, base not lowered | 200 ms on a supporting path. 60 s everywhere else. | The base is the policy the sender accepts from every other cache. A cache cannot tell intent from error. |
+| `max-age=1, max-age-ms=2000` ✓ | Deliberate, or a slip | 2 s on a supporting path. 1 s elsewhere. | The values are independent. Supporting caches reuse for longer, as asked. |
+| `max-age=0, max-age-ms=86400000` ✓ | Deliberate: no reuse at older caches | One day on a supporting path. No fresh lifetime elsewhere. | Same reasoning. This is no different from a long `max-age` today. |
+| `max-age=1, max-age-ms=1000` ✓ | Wanting exact accounting | One second, counted in milliseconds. | Legal, and useful: in nginx it halved the measured staleness. |
+| `max-age-ms=300` meant as seconds | Unit slip | 300 ms where used. A thousand times the origin requests. | The name carries the unit. A cache cannot detect it. Typing `max-age=0` by mistake has the same exposure today. |
+| `max-age-ms=200` with no `max-age` ✓ | Base forgotten | Companion ignored. RFC 9111 applies as if it were absent. | Never treated as zero or as a lifetime on its own, so older and newer caches agree. |
+| Base in Cache-Control, companion in CDN-Cache-Control | Split across fields | Companion ignored. | A pair must be in the same field. |
+| `s-maxage=1, max-age=0, max-age-ms=200` ✓ | Stale `s-maxage` left in place | Shared caches use one second. | `s-maxage` takes precedence at a shared cache, as in RFC 9111. Its own companion was not sent. |
+| `max-age=0, max-age-ms=0200` ✓ | Zero padding | 200 ms. | The grammar is one to fifteen digits. |
+| `+200`, `200ms`, `0.2`, `"200"`, empty, 16 digits ✓ | Typos, other formats | Companion ignored, base applies. | An invalid companion never invalidates its base. |
+| `Age: 1` with `Age-Ms: 175` ✓ | Old cache rewrote Age only | No fine age. Whole-second policy applies. | The pair is inconsistent, so neither is trusted for fine accounting. |
+| `Age-Ms` larger than the lifetime ✓ | Slow path | Stale on arrival. The cache validates. | Age is counted, not reset. |
+| `Retry-After: 120` with `Retry-After-Ms: 5` | Unit slip | Supporting clients may retry after 5 ms. Others wait 120 s. | The server chose both values. A client can apply its own minimum delay. |
+| Request `max-age=0, max-age-ms=0` at high rate | Abuse | Forces validation, as `max-age=0` does today. | No new capability. The prototype ignores request directives unless enabled. |
+
+Deployment mistakes, [measured in test 7](measurements.md#test-7-misconfigured-paths):
+
+| Mistake | Outcome | What limits it |
+|---|---|---|
+| An older cache inside a path configured as supporting | Responses up to the base lifetime older than intended. Measured: 2152 ms where 200 ms was asked, with `max-age=1`. | In our run, the time the base let the older cache hold the response. With `max-age=0` we measured no excess. Not a general limit: a faulty source can understate age by more. |
+| A gateway rewrites `max-age` to 0 and leaves `max-age-ms=3600000` | Supporting caches read one hour. | Not contained by caches. The draft asks a rewriter to examine the companion too. Not measured. |
+| An intermediary strips Age-Ms from `max-age=60, max-age-ms=200` | 60 s downstream. | Falling back restores the base, which is not always shorter. The sender must accept its base. |
+| No cache configured as hearing the origin | No fine age anywhere. Every cache uses the base. | The prototype reads a missing age pair as zero only at the cache configured as hearing the origin. The cost is load, not age. |
+| Every cache configured as hearing the origin | Upstream age ignored. Up to one lifetime per cache in the worst case; none in our run. | Each cache still counts its own request delay. |
+| `max-age=0, max-age-ms=1` | Almost nothing is reused. A quarter of requests reached the origin. | The same exposure as `max-age=0` today. |
+| Lifetime shorter than the round trip to the origin | Stale on arrival. Nothing reused at the far cache. | Age is counted. See [test 3](measurements.md#test-3-a-lifetime-shorter-than-the-path). |
+| Wall clock stepped back at a cache | The prototype detects a step over 10 ms and fetches again. | A smaller step extends reuse by its size. Unit tested; no real clock was stepped. |
+
+- **No consistency rule between the two values.** A rule such as "the base must not exceed the companion" would catch the first row, and would also forbid an origin that wants 5 seconds at older caches and 200 ms at newer ones. We left the values independent and put the check on the sender.
+- **A repeated companion is ignored**, even when the values agree, and the base applies.
 
 ## Appendix C. Alternative encodings
 
@@ -339,7 +418,7 @@ A prototype for nginx implements the companions for ordinary Cache-Control. It i
 
 ### What nginx needed
 
-The change is about 690 added lines of C in seven files. The tests are three new files in the nginx test suite, and are skipped on a binary without the change. Most of it is one new file. Everything is off unless configured.
+The change is about 730 added lines of C in six files. The tests are three new files in the nginx test suite, and are skipped on a binary without the change. Most of it is one new file. Everything is off unless configured.
 
 | Area | Change | Lines added |
 |---|---|---|
@@ -401,7 +480,7 @@ A simulation runs the prototype as five caches between an origin and a client, a
 | 234 ms round trip | `max-age=1` | 1011 | 1881 | 2 |
 | 234 ms round trip | `max-age=0, max-age-ms=500` | 208 | 470 | 6 |
 
-- **Updates arrive five to twenty times sooner**, and the lifetime holds across all five caches.
+- **Updates arrive five to twenty times sooner.** Each cache deducts the age it received, so five caches did not multiply the lifetime. This is not a strict bound on delivery age.
 - **The cost is origin requests.**
 - **A lifetime shorter than the round trip to the origin leaves the last cache nothing to reuse.**
 - These runs measure caches on one host, not players.

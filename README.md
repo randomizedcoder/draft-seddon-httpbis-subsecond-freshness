@@ -1,9 +1,10 @@
-# Millisecond Resolution for HTTP Cache Freshness
+# Millisecond Resolution for HTTP Durations
 
-This is the working area for the individual Internet-Draft, "Millisecond Resolution for HTTP Cache Freshness".
+This is the working area for the individual Internet-Draft, "Millisecond Resolution for HTTP Durations".
 
 - [Internet-Draft source](draft-seddon-httpbis-subsecond-freshness.md)
 - [Explainer with deployment examples, alternatives and background](explainer.md)
+- [Practical tests through five nginx caches, with results](measurements.md)
 - [Text copies of the referenced RFCs and drafts, for local searching](rfcs/README.md)
 
 ## Summary

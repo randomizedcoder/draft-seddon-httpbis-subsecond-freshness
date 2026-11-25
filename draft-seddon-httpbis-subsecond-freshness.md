@@ -1,6 +1,6 @@
 ---
-title: "Millisecond Resolution for HTTP Cache Freshness"
-abbrev: "Millisecond Cache Freshness"
+title: "Millisecond Resolution for HTTP Durations"
+abbrev: "Millisecond HTTP Durations"
 category: std
 
 docname: draft-seddon-httpbis-subsecond-freshness-latest
@@ -87,7 +87,7 @@ This document defines a millisecond companion for each of the following:
 
 | Whole seconds          | Milliseconds              | Used in             | Defined in     |
 |------------------------|---------------------------|---------------------|----------------|
-| delta-seconds rule     | delta-milliseconds rule   |                     | {{delta-ms}}   |
+| delta-seconds rule     | delta-milliseconds rule   | grammar             | {{delta-ms}}   |
 | max-age                | max-age-ms                | response, request   | {{directives}} |
 | s-maxage               | s-maxage-ms               | response            | {{directives}} |
 | stale-while-revalidate | stale-while-revalidate-ms | response            | {{directives}} |
@@ -179,6 +179,14 @@ Integer ({{Section 3.3.1 of RFC9651}}), so that the same value can be
 carried in a Cache-Control directive, in a targeted cache control field
 {{RFC9213}} and in the Age-Ms field. The largest value is a little over
 31,000 years.
+
+One millisecond is the finest decimal unit in which the whole delta-seconds
+range fits within that limit. The 2^31 seconds at which
+{{Section 1.2.2 of RFC9111}} saturates is 2,147,483,648,000 milliseconds,
+which has thirteen digits. Fifteen digits of microseconds cover less than
+32 years, and fifteen digits of nanoseconds less than 12 days. A companion
+in a finer unit could therefore not express every value of its base as a
+Structured Fields Integer.
 
 A recipient parsing a delta-milliseconds value and converting it to binary
 form needs an arithmetic type of at least 50 bits of non-negative integer
@@ -395,6 +403,10 @@ estimate, so that the Age field value is equal to the Age-Ms field value
 divided by 1000 and rounded down. A cache MUST NOT generate Age-Ms without
 also generating Age.
 
+These requirements apply to every response in which the cache generates an
+Age header field. That includes a 304 (Not Modified) response that the
+cache generates from a stored response.
+
 An origin server does not generate Age-Ms.
 
 ## Receiving Age-Ms {#receive}
@@ -481,9 +493,16 @@ it when calculating a fine age for a response from a fine-age source.
 
 A cache SHOULD use a monotonic clock to measure response_delay and
 resident_time. If a cache can no longer account for the whole of the time
-since the request, for example after a restart or a clock adjustment, it no
-longer has a fine age for the response. A stored response does not gain
-freshness as a result of such an event.
+since the request, it no longer has a fine age for the response. A stored
+response does not gain freshness as a result of such an event. In
+particular:
+
+- A gradual adjustment to the rate of a clock (a slew) preserves elapsed
+  time and does not affect the fine age.
+- A discontinuous change to a clock (a step) loses the fine age of every
+  response whose elapsed time was measured with that clock.
+- A restart loses the fine age unless the cache has recorded enough to
+  account for the time it was not running.
 
 A cache whose clock has a coarser resolution than one millisecond MUST
 round each age up, and each lifetime and stale window down, to that
@@ -639,13 +658,34 @@ For example, `max-age=0, max-age-ms=500` causes a legacy cache to validate
 its stored response, and `max-age=1, max-age-ms=500` allows a legacy cache
 to use a response that is up to one second old.
 
+## Choosing a Lifetime {#choosing}
+
+One millisecond is the resolution of the companions. It is not a
+recommended lifetime. The time a validation takes sets a practical lower
+limit:
+
+- A cache spends a freshness lifetime that is shorter than its validation
+  round trip mostly waiting for the origin server. A lifetime of several
+  round trips is needed before most requests are answered from the cache.
+- A stale-while-revalidate-ms window allows a cache to answer requests
+  while one validation is in progress. A window shorter than the validation
+  does not help, because requests that arrive after it ends wait for the
+  validation to complete.
+- Timer granularity and scheduling delay on a loaded host can amount to
+  several milliseconds. The rounding rule in {{fine-age}} ensures that such
+  delay shortens reuse and never extends it.
+
+A sender is advised to choose values that remain acceptable if a cache
+honours them only approximately, and that are no shorter than the
+application needs.
+
 ## Origin Load
 
 A short freshness lifetime increases the rate at which caches contact the
-origin server. A stale-while-revalidate-ms window allows a cache to answer
-requests while one validation is in progress, but it does not help if the
-validation takes longer than the window. Operators are advised to measure
-the request rate at each tier when shortening a lifetime.
+origin server. Shortening a lifetime from one second to 200 milliseconds
+allows up to five times as many validations from each cache. Operators are
+advised to measure the request rate at each tier when shortening a
+lifetime.
 
 ## Mixed Paths
 
@@ -660,8 +700,14 @@ obtains the response from a fine-age source.
 The considerations of {{Section 7 of RFC9111}} apply.
 
 An Age-Ms value that understates the age of a response can cause a cache to
-reuse the response for longer than the origin server intended, up to the
-fine freshness lifetime. {{receive}} limits this by requiring configuration
+reuse the response for longer than the origin server intended. The excess
+is bounded. A cache that relies on the value reuses the response for no
+longer than the fine freshness lifetime after receiving it, which is what
+it would do for a response that arrived with an age of zero. A party that
+can alter Age-Ms but not the cache directives cannot extend reuse at a
+cache beyond the lifetime that the origin server chose.
+
+{{receive}} further limits the exposure by requiring configuration
 before the field is used, and by requiring an implementing cache to remove
 a value that it did not use. The consistency check in {{receive}} detects
 some errors but is not a defence against a sender that generates a
@@ -681,7 +727,8 @@ value, as it does for Retry-After.
 Age-Ms reveals the time a response has spent in caches with finer
 resolution than Age. Together with fields such as Cache-Status {{RFC9211}},
 this can make it easier for an observer to infer when other clients
-requested the same resource. Operators can remove the field at a trust
+requested the same resource, which adds to the timing attacks described in
+{{Section 7.2 of RFC9111}}. Operators can remove the field at a trust
 boundary.
 
 # IANA Considerations
@@ -808,7 +855,10 @@ Explicit units:
 : Companions such as `max-age-fine="1250ms"` could also express
   microseconds. They need a unit grammar, a range for each unit and
   conversion between units. No use case that needs a resolution finer than
-  one millisecond has been identified.
+  one millisecond has been identified. If one is, a further companion in
+  that unit could follow the pattern of this document, with the base and
+  the millisecond companion as its fallbacks. Its range would be shorter
+  than that of its base ({{delta-ms}}).
 
 A parameter in targeted fields:
 : `CDN-Cache-Control: max-age=0;ms=200` attaches the fine value to its base,
@@ -831,7 +881,9 @@ changed by this document.
 |--------------------|--------|
 | Date, Expires, Last-Modified | Timestamps. A finer Expires would need a new date format, a finer Date and clocks that agree to the millisecond. A fine lifetime with a fine age gives each cache the same expiry time without them. Sub-second changes to a representation can be distinguished with entity tags ({{Section 8.8.3 of RFC9110}}). |
 | Alt-Svc ma | Governs an alternative service advertisement, not a response. |
-| Strict-Transport-Security max-age, Set-Cookie Max-Age | Security policy and cookie retention, with their own expiry rules. |
+| immutable | Takes no duration. It applies for the freshness lifetime, however that is expressed. |
+| Strict-Transport-Security max-age, Expect-CT max-age, Set-Cookie Max-Age | Security policy and cookie retention, with their own expiry rules. |
+| Web Push TTL | Bounds how long a push service retains a message for a device that is offline. |
 | Signature created and expires parameters | Bound the acceptance of a signature. Their specification states that sub-second precision is not supported. |
 
 # Implementation Status
@@ -851,6 +903,12 @@ Age-Ms field for responses with a 200 status code. It implements:
 It does not yet implement the fine directives in targeted fields, or the
 max-stale-ms and stale-if-error-ms request directives. It forwards
 Retry-After-Ms and wait-ms without acting on them.
+
+The prototype differs from this document in two ways. It records the time
+a response was stored using a wall clock, so a step of that clock changes
+the fine age instead of discarding it ({{fine-age}}). It applies a fine
+stale window only to a response whose freshness lifetime comes from max-age
+or s-maxage, and not to one whose lifetime comes from Expires.
 
 # Acknowledgements
 {:numbered="false"}

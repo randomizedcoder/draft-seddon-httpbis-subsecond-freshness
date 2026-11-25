@@ -1,4 +1,4 @@
-# Finer resolution for HTTP cache durations
+# Finer resolution for HTTP durations
 
 Dave Seddon · Discussion proposal for the HTTP Working Group · [Internet-Draft source](draft-seddon-httpbis-subsecond-freshness.md)
 
@@ -8,6 +8,7 @@ Dave Seddon · Discussion proposal for the HTTP Working Group · [Internet-Draft
 - **Proposal.** Millisecond companions for the cache directives that carry a duration and for the Age response field, so that each cache counts the time already spent upstream.
 - **Scope.** Every whole-second duration in HTTP caching, plus Retry-After and Prefer `wait`. Appendix A lists each field and what we left unchanged.
 - **Rollout.** The origin sends a whole-second fallback with every companion. Older caches use the fallback.
+- **Measured.** Through five nginx caches, responses under `max-age=1` averaged 999 ms behind the origin, and 48 ms under `max-age-ms=100`. [Practical tests](measurements.md)
 
 ## Sharing a freshness lifetime
 
@@ -73,6 +74,7 @@ delta-milliseconds = 1*15DIGIT
 
 - **Meaning.** A non-negative integer number of milliseconds. It gives the complete duration and is never added to a delta-seconds value.
 - **Range.** Fifteen digits is the Structured Fields Integer limit, about 31,700 years. The same value therefore parses in Cache-Control and in a targeted dictionary. [RFC 9651 §3.3.1](https://www.rfc-editor.org/rfc/rfc9651.html#section-3.3.1)
+- **Why milliseconds.** It is the finest decimal unit in which the whole delta-seconds range fits a Structured Fields Integer. The 2^31-second ceiling is 13 digits of milliseconds. Fifteen digits of microseconds cover under 32 years, and of nanoseconds under 12 days.
 - **Arithmetic.** RFC 9111 suggests at least 31 bits for delta-seconds. In milliseconds, 31 bits last under 25 days. A recipient needs 41 bits for the 2^31-second ceiling and 50 bits for the whole 15-digit range. A 64-bit integer covers both.
 - **Overflow.** A delta-seconds value that is too large is treated as 2^31 seconds. A companion always arrives with a whole-second base, so we propose that a recipient rejects an unrepresentable value and uses the base. The WG may prefer the saturating rule for consistency.
 - **Age calculation.** RFC 9111 defines it as clock differences. Only the Age field value and the freshness lifetime are tied to seconds, so the same steps work in milliseconds. [RFC 9111 §4.2.3](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.3)
@@ -219,6 +221,8 @@ The companions would be `max-age-fine`, `s-maxage-fine`, `stale-while-revalidate
 
 - **Syntax.** A quoted string of unsigned decimal digits followed immediately by lowercase `ms`, `us` or `ns`. The quotes work in both Cache-Control and a targeted dictionary. Bare `200ms` would cause a dictionary parse error and could discard the entire targeted policy. [RFC 9213 §2.1](https://www.rfc-editor.org/rfc/rfc9213.html#section-2.1) · [RFC 9651 §3.3.3](https://www.rfc-editor.org/rfc/rfc9651.html#section-3.3.3)
 - **Cost.** A recipient must reject a missing or unknown unit, bound the digits and check the multiplication before converting units. The Age consistency check uses the declared unit.
+- **Prior art.** gRPC's `grpc-timeout` header carries at most eight digits followed by a unit letter, from hours down to nanoseconds. It shows that sub-second durations are already sent in HTTP header fields, and what a unit grammar involves. [gRPC over HTTP/2](https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md)
+- **A finer unit later.** A further companion such as `max-age-us` could follow the same pattern, with the base and the millisecond companion as its fallbacks. Its range would be shorter than its base's.
 
 ### Decimal seconds
 
@@ -385,6 +389,22 @@ return (max_age < 0 || age <= max_age)
 | `max-stale-ms`, `stale-if-error-ms` (request) | No |
 | Targeted fields such as CDN-Cache-Control | No |
 | `Retry-After-Ms`, Prefer `wait-ms` | Forwarded. nginx does not generate or act on either |
+
+### Measured through five caches
+
+A simulation runs the prototype as five caches between an origin and a client, and measures how old each response is when it leaves the last cache. [Practical tests: setup, four tests and their limits](measurements.md)
+
+| Path delay | Cache-Control | Mean staleness, ms | Max, ms | Origin requests per second |
+|---|---|---:|---:|---:|
+| None | `max-age=1` | 999 | 1999 | 2 |
+| None | `max-age=0, max-age-ms=100` | 48 | 111 | 36 |
+| 234 ms round trip | `max-age=1` | 1011 | 1881 | 2 |
+| 234 ms round trip | `max-age=0, max-age-ms=500` | 208 | 470 | 6 |
+
+- **Updates arrive five to twenty times sooner**, and the lifetime holds across all five caches.
+- **The cost is origin requests.**
+- **A lifetime shorter than the round trip to the origin leaves the last cache nothing to reuse.**
+- These runs measure caches on one host, not players.
 
 ### What took the effort
 

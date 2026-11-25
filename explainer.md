@@ -200,7 +200,7 @@ We read the source of three browser engines and eight caches in November 2026 to
 |---|---|---|---|---|
 | Chromium | Microseconds | Sub-second | n/a | Network cache ignores the directive |
 | WebKit (Safari) | Floating-point seconds | Sub-second | n/a | Uses 200 ms |
-| Firefox | Whole seconds | One second | n/a | Not checked |
+| Firefox | Whole seconds | One second | n/a | Truncates to 0 and stops reading the field |
 | Varnish | Floating-point seconds | Sub-second | Whole seconds | Truncates to 0 |
 | Envoy cache filter | Sub-second type | One second: age is cast to seconds | Whole seconds | Ignores the directive |
 | Apache httpd `mod_cache` | Microseconds | One second: compared in seconds | Whole seconds | Ignores the directive |
@@ -220,7 +220,7 @@ What the survey shows:
 
 So the accurate statement is narrower than "implementations are already sub-second". Some widely used ones are, most are not, and none of them can agree on a sub-second lifetime because HTTP has no way to express one.
 
-Limits of the survey: it is a source read on one date, not a test. Not confirmed: Firefox's handling of a fractional value, how Traffic Server parses and formats `Age`, and whether Fastly's cache honours a sub-second lifetime. The CDN figures come from public documentation only.
+Limits of the survey: it is a source read on one date, not a test. Not confirmed: whether Fastly's cache honours a sub-second lifetime. The CDN figures come from public documentation only.
 
 Sources: Varnish [`cache_rfc2616.c`](https://github.com/varnishcache/varnish-cache/blob/master/bin/varnishd/cache/cache_rfc2616.c), [VCL durations](https://varnish-cache.org/docs/trunk/reference/vcl.html) · Squid [`refresh.cc`](https://github.com/squid-cache/squid/blob/master/src/refresh.cc) · Traffic Server [`MIME.cc`](https://github.com/apache/trafficserver/blob/master/src/proxy/hdrs/MIME.cc) · HAProxy [`cache.c`](https://github.com/haproxy/haproxy/blob/master/src/cache.c) · Envoy [`cache_headers_utils.cc`](https://github.com/envoyproxy/envoy/blob/main/source/extensions/filters/http/cache/cache_headers_utils.cc) · httpd [`cache_util.c`](https://github.com/apache/httpd/blob/trunk/modules/cache/cache_util.c) · Souin [`pkg/rfc`](https://github.com/darkweak/souin/tree/master/pkg/rfc) · nginx [`ngx_http_upstream.c`](https://github.com/nginx/nginx/blob/master/src/http/ngx_http_upstream.c). Browser sources are listed in the next section.
 
@@ -243,7 +243,7 @@ The facts were read from each engine's source tree on 24 November 2026. They are
 | `max-age=0, max-age-ms=200` today | Stale at once; validates each use | Same | Same |
 | `max-age=1, max-age-ms=200` today | Fresh for one second | Fresh for under one second | Fresh for one second |
 | `Age-Ms` today | Not read | Not read | Not read |
-| `max-age=0.2` today (not proposed) | Network cache ignores the directive | Not checked | Used as 200 ms |
+| `max-age=0.2` today (not proposed) | Network cache ignores the directive | Truncated to 0; rest of the field unread | Used as 200 ms |
 | Time arithmetic | Microseconds | Whole seconds | Floating-point seconds |
 | Stored on disk | Times in microseconds; no stored expiry | Expiry in whole seconds | Timestamp in floating point |
 | Clock used for age | Wall clock | Wall clock | Wall clock |
@@ -306,7 +306,7 @@ Not confirmed: that the renderer parser accepts a fraction end to end; any earli
 **Today**
 
 - All freshness arithmetic is in unsigned 32-bit whole seconds. The current time is the wall clock truncated to seconds. A source comment says the logic "can't have better resolution than seconds".
-- `max-age` is read as an integer. The tokenizer treats `max-age-ms` as one unknown word and ignores it. `Age` is read with `atoi`. `Age-Ms` is never read.
+- `max-age` is read as an integer. Given `max-age=0.2`, the parser takes 0 and stops at the point, so any directives after it in that field are not read. The tokenizer treats `max-age-ms` as one unknown word and ignores it. `Age` is read with `atoi`. `Age-Ms` is never read.
 - Because the clock is truncated, a `max-age=1` response is fresh for somewhere between zero and one second of real time. This is our inference from the code, not a test.
 - The cache entry's expiry is stored on disk as 32-bit seconds.
 
@@ -339,7 +339,7 @@ Not confirmed: that the renderer parser accepts a fraction end to end; any earli
 
 Sources: [`nsHttpResponseHead.cpp`](https://searchfox.org/firefox-main/source/netwerk/protocol/http/nsHttpResponseHead.cpp) · [`CacheControlParser.cpp`](https://searchfox.org/firefox-main/source/netwerk/protocol/http/CacheControlParser.cpp) · [`nsHttp.cpp`](https://searchfox.org/firefox-main/source/netwerk/protocol/http/nsHttp.cpp) · [`nsICacheEntry.idl`](https://searchfox.org/firefox-main/source/netwerk/cache2/nsICacheEntry.idl) · [`CacheEntry.cpp`](https://searchfox.org/firefox-main/source/netwerk/cache2/CacheEntry.cpp) · [`SharedSubResourceCache.h`](https://searchfox.org/firefox-main/source/layout/style/SharedSubResourceCache.h) · related test flakiness from whole-second granularity: [bug 1762147](https://bugzilla.mozilla.org/show_bug.cgi?id=1762147)
 
-Not confirmed: handling of a fractional `max-age`; back/forward cache rules; whether the cache index keeps its own copy of the expiry.
+Not confirmed: back/forward cache rules; whether the cache index keeps its own copy of the expiry.
 
 ### Safari and WebKit
 
@@ -548,7 +548,7 @@ Writing `max-age=0.2` has no safe fallback. [RFC 9111 §4.2.1](https://www.rfc-e
 | Targeted-field parser | The value parses as a Decimal. RFC 9213 says implementations should not consume a max-age with a decimal value. |
 | A recipient that truncates | Sees zero |
 
-Deployed implementations do all of these and more. Of the eleven we read, WebKit uses the fraction, four truncate to zero, four ignore the directive and nginx declines to cache the response. [Survey](#what-implementations-do-today)
+Deployed implementations do all of these and more. Of the eleven we read, WebKit uses the fraction, five truncate to zero, four ignore the directive and nginx declines to cache the response. [Survey](#what-implementations-do-today)
 
 None of these lets the origin choose a one-second fallback. A separate companion leaves the base valid for every recipient.
 

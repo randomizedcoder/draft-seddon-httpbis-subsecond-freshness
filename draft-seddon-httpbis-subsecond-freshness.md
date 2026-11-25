@@ -1196,7 +1196,7 @@ Decimal seconds:
   Existing implementations also differ. Among eleven browser engines and
   caches whose source was examined in November 2026, a value of
   `max-age=0.2` was used as 200 milliseconds by one, truncated to zero
-  by four and ignored as an invalid directive by four, and one declined
+  by five and ignored as an invalid directive by four, and one declined
   to store the response.
 
 Explicit units:

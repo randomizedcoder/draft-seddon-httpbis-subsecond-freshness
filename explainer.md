@@ -331,11 +331,11 @@ The whole-second unit entered HTTP caching in 1997 and has been carried forward 
 
 ## Appendix E. Notes for implementers
 
-A prototype for nginx implements the companions for ordinary Cache-Control. It is the `http-cache-millisecond-freshness` branch of a fork. [Branch](https://github.com/randomizedcoder/nginx/tree/http-cache-millisecond-freshness) · [Build, tests and demo](https://github.com/randomizedcoder/nginx/tree/http-cache-millisecond-freshness/contrib/subsecond-cache)
+A prototype for nginx implements the companions for ordinary Cache-Control. It is the `http-cache-millisecond-freshness` branch of a fork. [Branch](https://github.com/randomizedcoder/nginx/tree/http-cache-millisecond-freshness) · [Build and demo](https://github.com/randomizedcoder/nginx/tree/http-cache-millisecond-freshness/contrib/subsecond-cache) · [Integration tests, on a matching branch of an nginx-tests fork](https://github.com/randomizedcoder/nginx-tests/tree/http-cache-millisecond-freshness)
 
 ### What nginx needed
 
-The change is about 690 added lines of C in seven files, plus tests. Most of it is one new file. Everything is off unless configured.
+The change is about 690 added lines of C in seven files. The tests are three new files in the nginx test suite, and are skipped on a binary without the change. Most of it is one new file. Everything is off unless configured.
 
 | Area | Change | Lines added |
 |---|---|---|

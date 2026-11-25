@@ -31,6 +31,7 @@ author:
 
 normative:
   RFC5861:
+  RFC7240:
   RFC9110:
   RFC9111:
   RFC9213:
@@ -54,10 +55,12 @@ informative:
 HTTP caches express freshness lifetimes and response age in whole seconds.
 An origin server can therefore ask for a response to be reused for zero
 seconds or for one second, with nothing in between. This document defines
-millisecond companions for the max-age, s-maxage and stale-while-revalidate
-response directives and for the Age response header field. Each companion is
-sent together with its whole-second counterpart, so that caches which do not
-implement this specification continue to operate as they do today.
+millisecond companions for the cache directives that carry a duration, for
+the Age response header field and for the ttl parameter of Cache-Status. It
+also defines companions for the Retry-After header field and the wait
+preference. Each companion is sent together with its whole-second
+counterpart, so that implementations which do not support this
+specification continue to operate as they do today.
 
 --- middle
 
@@ -82,13 +85,19 @@ for up to the full lifetime again.
 
 This document defines a millisecond companion for each of the following:
 
-| Whole seconds          | Milliseconds              | Defined in     |
-|------------------------|---------------------------|----------------|
-| delta-seconds rule     | delta-milliseconds rule   | {{delta-ms}}   |
-| max-age                | max-age-ms                | {{directives}} |
-| s-maxage               | s-maxage-ms               | {{directives}} |
-| stale-while-revalidate | stale-while-revalidate-ms | {{directives}} |
-| Age                    | Age-Ms                    | {{age-ms}}     |
+| Whole seconds          | Milliseconds              | Used in             | Defined in     |
+|------------------------|---------------------------|---------------------|----------------|
+| delta-seconds rule     | delta-milliseconds rule   |                     | {{delta-ms}}   |
+| max-age                | max-age-ms                | response, request   | {{directives}} |
+| s-maxage               | s-maxage-ms               | response            | {{directives}} |
+| stale-while-revalidate | stale-while-revalidate-ms | response            | {{directives}} |
+| stale-if-error         | stale-if-error-ms         | response, request   | {{directives}} |
+| max-stale              | max-stale-ms              | request             | {{directives}} |
+| min-fresh              | min-fresh-ms              | request             | {{directives}} |
+| Age                    | Age-Ms                    | response            | {{age-ms}}     |
+| Cache-Status ttl       | ttl-ms                    | response            | {{ttl-ms}}     |
+| Retry-After            | Retry-After-Ms            | response            | {{retry}}      |
+| Prefer wait            | wait-ms                   | request             | {{wait}}       |
 
 For example, a cache that has held a response for 175 milliseconds of a
 200 millisecond lifetime sends:
@@ -115,8 +124,13 @@ over QUIC Transport expresses the time an object can be served from a
 relay's cache in milliseconds {{I-D.ietf-moq-transport}}, and QUIC
 expresses its idle timeout in milliseconds ({{Section 18.2 of RFC9000}}).
 
-This document does not change the behaviour of caches that do not implement
-it, and it does not define companions for request directives.
+This document does not change the behaviour of implementations that do not
+support it. It covers every duration defined by {{RFC9111}}, {{RFC5861}} and
+{{RFC9211}}. Retry-After and the wait preference are not part of caching.
+They are included in {{non-cache}} so that the whole-second durations of
+HTTP can be considered together, and that section can be separated if the
+Working Group prefers. {{other}} lists the time-related fields that this
+document leaves unchanged.
 
 ## Requirements Language
 
@@ -138,13 +152,14 @@ legacy cache:
 : A cache that does not implement this specification.
 
 base directive:
-: One of the max-age, s-maxage or stale-while-revalidate response
-  directives.
+: One of the max-age, s-maxage, stale-while-revalidate or stale-if-error
+  response directives, or the max-age, max-stale, min-fresh or
+  stale-if-error request directives.
 
 fine directive:
-: One of the max-age-ms, s-maxage-ms or stale-while-revalidate-ms response
-  directives. Each fine directive is the companion of the base directive
-  whose name it extends.
+: A directive whose name is that of a base directive followed by "-ms".
+  Each fine directive is the companion of the base directive whose name it
+  extends, in the same kind of message.
 
 fine age:
 : An estimate of a response's age with millisecond resolution, established
@@ -199,7 +214,13 @@ These directives are behavioural extensions in the sense of
 alongside it. A legacy cache ignores the fine directive and applies the
 base directive.
 
-## max-age-ms
+{{response-directives}} defines the response directives and
+{{request-directives}} the request directives. The requirements of
+{{pairing}} apply to both.
+
+## Response Directives {#response-directives}
+
+### max-age-ms
 
 Argument syntax:
 
@@ -210,7 +231,7 @@ considered stale after its age is greater than or equal to the specified
 number of milliseconds. It is the companion of the max-age response
 directive ({{Section 5.2.2.1 of RFC9111}}).
 
-## s-maxage-ms
+### s-maxage-ms
 
 Argument syntax:
 
@@ -226,7 +247,7 @@ particular, a response containing s-maxage is still subject to the
 requirements of the proxy-revalidate response directive, so a shared cache
 cannot serve it stale.
 
-## stale-while-revalidate-ms
+### stale-while-revalidate-ms
 
 Argument syntax:
 
@@ -238,11 +259,61 @@ specified number of milliseconds, under the conditions given in
 {{Section 3 of RFC5861}}. It is the companion of the stale-while-revalidate
 response directive.
 
+### stale-if-error-ms {#sie}
+
+Argument syntax:
+
+: delta-milliseconds (see {{delta-ms}})
+
+The stale-if-error-ms response directive indicates that, when an error is
+encountered, a cache MAY use the stale response in which it appears to
+satisfy a request, until the response has been stale for the specified
+number of milliseconds, under the conditions given in
+{{Section 4 of RFC5861}}. It is the companion of the stale-if-error
+response directive.
+
+## Request Directives {#request-directives}
+
+Each of the following request directives takes a delta-milliseconds
+argument ({{delta-ms}}). Each has the meaning of its base directive, with
+the duration in milliseconds.
+
+max-age-ms:
+: The client prefers a response whose age is less than or equal to the
+  specified number of milliseconds. Companion of max-age
+  ({{Section 5.2.1.1 of RFC9111}}).
+
+max-stale-ms:
+: The client will accept a response that has exceeded its freshness
+  lifetime by no more than the specified number of milliseconds. Companion
+  of max-stale ({{Section 5.2.1.2 of RFC9111}}).
+
+min-fresh-ms:
+: The client prefers a response that will still be fresh for at least the
+  specified number of milliseconds. Companion of min-fresh
+  ({{Section 5.2.1.3 of RFC9111}}).
+
+stale-if-error-ms:
+: The client will accept a stale response when an error is encountered,
+  until the response has been stale for the specified number of
+  milliseconds. Companion of stale-if-error ({{Section 4 of RFC5861}}).
+
+A max-stale directive without an argument accepts a stale response of any
+age. A max-stale-ms directive that accompanies it has no effect.
+
+An implementing cache applies a fine request directive to a stored response
+for which it has a fine age ({{fine-age}}). For any other stored response
+it applies the base directive.
+
+A cache that forwards a request forwards its fine directives together with
+their base directives.
+
 ## Pairing {#pairing}
 
 A sender that generates a fine directive MUST also generate its base
-directive in the same field. The base directive is the policy that the
-sender accepts from every cache that does not use the fine directive. The
+directive, with an argument, in the same field. The base directive is the
+policy that the sender accepts from every cache that does not use the fine
+directive. The
 two values are otherwise independent. {{base-policy}} discusses the choice
 of base value.
 
@@ -253,7 +324,8 @@ following is true:
   invalid value;
 - its argument does not match the delta-milliseconds rule;
 - it appears more than once in the field with differing values; or
-- the cache has no fine age for the response ({{fine-age}}).
+- the cache has no fine age for the response, or for the stored response
+  being considered for a request ({{fine-age}}).
 
 A cache that ignores a fine directive applies the remaining directives as
 specified in {{RFC9111}} and {{RFC5861}}. Ignoring a fine directive never
@@ -266,7 +338,7 @@ directive is present.
 
 ## Targeted Cache Control {#targeted}
 
-The fine directives can be used in targeted cache control fields
+The fine response directives can be used in targeted cache control fields
 {{RFC9213}}, such as CDN-Cache-Control. In such a field a fine directive is
 a Dictionary member whose value is an Integer. A member with any other
 type, or with a negative value, is invalid and is ignored as described in
@@ -363,6 +435,26 @@ An implementing cache MUST NOT forward, or store for later forwarding, an
 Age-Ms field that it has not used as the fine age_value. This prevents an
 unreliable value from reaching a downstream cache that would rely on it.
 
+# The ttl-ms Cache-Status Parameter {#ttl-ms}
+
+The ttl-ms parameter of the Cache-Status header field {{RFC9211}} conveys
+the response's remaining freshness lifetime as calculated by the cache, in
+milliseconds. It is the companion of the ttl parameter
+({{Section 2.4 of RFC9211}}). Its value is an Integer. It can be negative,
+to indicate staleness.
+
+~~~ http-message
+Cache-Status: ExampleCache; hit; ttl=0; ttl-ms=25
+~~~
+
+A cache MAY generate ttl-ms when it has a fine age for the response
+({{fine-age}}). It MUST NOT generate ttl-ms otherwise. A cache that
+generates ttl-ms MUST also generate ttl in the same list member, and
+derives both from the same calculation.
+
+Like the other Cache-Status parameters, ttl-ms describes how a cache
+handled a request. A recipient does not use it to calculate freshness.
+
 # Cache Operation {#operation}
 
 ## Establishing a Fine Age {#fine-age}
@@ -435,6 +527,25 @@ served stale at an age of 399 milliseconds and cannot at 400 milliseconds.
 A validation that is still in progress when the window ends does not extend
 it.
 
+A paired stale-if-error-ms directive, in the response or in the request, is
+used in the same way in place of the value of stale-if-error. Its window
+also begins when the response becomes stale, and is independent of the
+stale-while-revalidate window.
+
+## Applying Request Directives {#apply-request}
+
+An implementing cache that has a fine age for a stored response evaluates
+the request directives of {{Section 5.2.1 of RFC9111}} in milliseconds. It
+uses the value of each paired fine request directive in place of the value
+of its base directive. A value expressed in seconds, whether from a request
+directive or from the response, is converted to milliseconds.
+
+For example, a stored response with a freshness lifetime of 2000
+milliseconds and a fine age of 1600 milliseconds satisfies
+`max-age=1, max-age-ms=1750`. It does not satisfy
+`min-fresh=0, min-fresh-ms=500`, because it will be fresh for only another
+400 milliseconds.
+
 ## Validation {#validation}
 
 When a stored response is updated by a 304 (Not Modified) response
@@ -445,6 +556,62 @@ previous fine age is discarded.
 The fine directives that apply afterwards are those in the updated stored
 response. If the 304 response replaces a field that carried a fine
 directive with one that does not, the fine directive no longer applies.
+
+# Durations Outside Caching {#non-cache}
+
+The companions in this section do not depend on the rest of this document,
+apart from the delta-milliseconds rule.
+
+## The Retry-After-Ms Response Header Field {#retry}
+
+The Retry-After-Ms response header field indicates how long the user agent
+ought to wait before making a follow-up request, in milliseconds, measured
+from when the response is received. It is the companion of the Retry-After
+header field ({{Section 10.2.3 of RFC9110}}).
+
+Retry-After-Ms is an Item Structured Header Field {{RFC9651}}. Its value
+MUST be an Integer, and the value MUST be non-negative.
+
+~~~ http-message
+Retry-After: 1
+Retry-After-Ms: 250
+~~~
+
+A server that generates Retry-After-Ms MUST also generate Retry-After. A
+recipient that does not implement this specification uses Retry-After
+alone. A server SHOULD therefore choose a Retry-After value that is not
+earlier than the time indicated by Retry-After-Ms, so that no recipient
+retries sooner than the server intends.
+
+A recipient that implements this specification uses a valid Retry-After-Ms
+value in place of the Retry-After value. It MUST ignore Retry-After-Ms when
+the Retry-After field is absent or invalid.
+
+Retry-After-Ms carries a delay and has no form that carries a date. This
+document defines no means of accounting for time that the response spent
+in transit or in a cache.
+
+## The wait-ms Preference {#wait}
+
+The wait-ms preference establishes an upper bound, in milliseconds, on the
+length of time the client expects the server to take to process the request
+once it has been received. It is the companion of the wait preference
+({{Section 4.3 of RFC7240}}).
+
+~~~ abnf
+wait-ms = "wait-ms" BWS "=" BWS delta-milliseconds
+~~~
+
+BWS is defined in {{Section 5.6.3 of RFC9110}}.
+
+~~~ http-message
+Prefer: respond-async, wait=1, wait-ms=250
+~~~
+
+A client that sends wait-ms MUST also send wait. A server that does not
+recognise wait-ms ignores it ({{Section 2 of RFC7240}}) and can apply wait.
+A server that implements this specification uses a valid wait-ms value in
+place of the wait value, and ignores wait-ms when wait is absent.
 
 # Deployment Considerations
 
@@ -466,6 +633,11 @@ sends a base value of one.
 
 Senders can scope the fine policy to the caches they have an arrangement
 with by using a targeted field ({{targeted}}).
+
+The same choice applies to a client that sends a fine request directive.
+For example, `max-age=0, max-age-ms=500` causes a legacy cache to validate
+its stored response, and `max-age=1, max-age-ms=500` allows a legacy cache
+to use a response that is up to one second old.
 
 ## Origin Load
 
@@ -499,7 +671,12 @@ An Age-Ms value that overstates the age causes additional validation
 requests, as an overstated Age value does today.
 
 Short lifetimes can be used to increase load on an origin server or on an
-upstream cache. This is already possible with a lifetime of zero.
+upstream cache. This is already possible with a lifetime of zero. In the
+same way, a fine request directive does not let a client cause more
+validation than `max-age=0` does.
+
+A small Retry-After-Ms value invites frequent retries. A server chooses the
+value, as it does for Retry-After.
 
 Age-Ms reveals the time a response has spent in caches with finer
 resolution than Age. Together with fields such as Cache-Status {{RFC9211}},
@@ -518,18 +695,57 @@ Protocol (HTTP) Cache Directive Registry" established by
 | Cache Directive           | Reference                      |
 |---------------------------|--------------------------------|
 | max-age-ms                | {{directives}} of this document |
+| max-stale-ms              | {{directives}} of this document |
+| min-fresh-ms              | {{directives}} of this document |
 | s-maxage-ms               | {{directives}} of this document |
+| stale-if-error-ms         | {{directives}} of this document |
 | stale-while-revalidate-ms | {{directives}} of this document |
 
-## Header Field
+## Header Fields
 
-IANA is asked to register the following entry in the "Hypertext Transfer
+IANA is asked to register the following entries in the "Hypertext Transfer
 Protocol (HTTP) Field Name Registry" established by
 {{Section 16.3.1 of RFC9110}}:
 
-| Field Name | Status    | Structured Type | Reference                   |
-|------------|-----------|-----------------|-----------------------------|
-| Age-Ms     | permanent | Item            | {{age-ms}} of this document |
+| Field Name     | Status    | Structured Type | Reference                   |
+|----------------|-----------|-----------------|-----------------------------|
+| Age-Ms         | permanent | Item            | {{age-ms}} of this document |
+| Retry-After-Ms | permanent | Item            | {{retry}} of this document  |
+
+## Cache-Status Parameter
+
+IANA is asked to register the following entry in the "HTTP Cache-Status"
+registry established by {{RFC9211}}:
+
+Name:
+: ttl-ms
+
+Type:
+: Integer
+
+Description:
+: The response's remaining freshness lifetime, in milliseconds
+
+Reference:
+: {{ttl-ms}} of this document
+
+## Preference
+
+IANA is asked to register the following entry in the "HTTP Preferences"
+registry established by {{RFC7240}}:
+
+Preference:
+: wait-ms
+
+Value:
+: A non-negative integer number of milliseconds
+
+Description:
+: An upper bound, in milliseconds, on the time the client expects the
+  server to take to process the request
+
+Reference:
+: {{wait}} of this document
 
 --- back
 
@@ -549,6 +765,19 @@ that no other directive restricts reuse.
 | `s-maxage=1, max-age=0, max-age-ms=200` | A shared cache uses one second. A private cache uses 200 ms. |
 | `max-age=0, max-age-ms=200, no-cache` | The response is not reused without validation. |
 | `max-age=0, max-age-ms=200, stale-while-revalidate=0, stale-while-revalidate-ms=200` | Fresh until 200 ms. Can be served stale while revalidating until 400 ms. |
+| `max-age=0, max-age-ms=200, stale-if-error=1, stale-if-error-ms=1500` | Fresh until 200 ms. Can be used when an error is encountered until 1700 ms. |
+
+The following table shows request directives applied to a stored response
+that has a freshness lifetime of 2000 milliseconds.
+
+| Request | Fine age | Outcome at an implementing cache |
+|---|---|---|
+| `max-age=1, max-age-ms=1750` | 1600 ms | Satisfied. |
+| `max-age=1, max-age-ms=1750` | 1800 ms | Not satisfied. The cache validates the response. |
+| `min-fresh=0, min-fresh-ms=500` | 1600 ms | Not satisfied. The response is fresh for only another 400 ms. |
+| `max-stale=0, max-stale-ms=250` | 2200 ms | Satisfied. The response has been stale for 200 ms. |
+| `max-stale, max-stale-ms=250` | 2500 ms | Satisfied. max-stale without an argument accepts any staleness. |
+| `max-age-ms=1750` | 1600 ms | The fine directive is ignored because max-age is absent. |
 
 The following table shows an implementing cache receiving a response from
 a sender that it is configured to treat as a fine-age source.
@@ -593,25 +822,35 @@ A fraction within Age:
   {{Section 5.1 of RFC9111}}, and a cache that receives an invalid Age
   field is advised to ignore it, losing the whole-second value as well.
 
-# Other Durations in HTTP {#other}
+# Time-Related Fields Left Unchanged {#other}
 
-Other HTTP fields carry time in whole seconds. They are not changed by this
-document.
+The following fields and parameters carry time in whole seconds and are not
+changed by this document.
 
-| Field or directive | Note |
-|--------------------|------|
-| stale-if-error {{RFC5861}} | Candidate for the same treatment if there is a use for it. |
-| max-age, min-fresh and max-stale request directives ({{Section 5.2.1 of RFC9111}}) | Candidates, as above. |
-| ttl parameter of Cache-Status {{RFC9211}} | Candidate, as above. |
-| Date, Expires, Last-Modified | Timestamps with a resolution of one second. Sub-second changes to a representation can be distinguished with entity tags ({{Section 8.8.3 of RFC9110}}). |
+| Field or parameter | Reason |
+|--------------------|--------|
+| Date, Expires, Last-Modified | Timestamps. A finer Expires would need a new date format, a finer Date and clocks that agree to the millisecond. A fine lifetime with a fine age gives each cache the same expiry time without them. Sub-second changes to a representation can be distinguished with entity tags ({{Section 8.8.3 of RFC9110}}). |
+| Alt-Svc ma | Governs an alternative service advertisement, not a response. |
+| Strict-Transport-Security max-age, Set-Cookie Max-Age | Security policy and cookie retention, with their own expiry rules. |
+| Signature created and expires parameters | Bound the acceptance of a signature. Their specification states that sub-second precision is not supported. |
 
 # Implementation Status
 
 This section is to be removed before publication.
 
-A prototype for nginx implements the fine directives in Cache-Control and
-the Age-Ms field for responses with a 200 status code. It does not yet
-implement the fine directives in targeted fields.
+A prototype for nginx implements fine directives in Cache-Control and the
+Age-Ms field for responses with a 200 status code. It implements:
+
+- the max-age-ms, s-maxage-ms, stale-while-revalidate-ms and
+  stale-if-error-ms response directives;
+- the max-age-ms and min-fresh-ms request directives, when enabled by
+  configuration; and
+- variables from which an operator can compose the ttl and ttl-ms
+  Cache-Status parameters.
+
+It does not yet implement the fine directives in targeted fields, or the
+max-stale-ms and stale-if-error-ms request directives. It forwards
+Retry-After-Ms and wait-ms without acting on them.
 
 # Acknowledgements
 {:numbered="false"}

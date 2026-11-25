@@ -10,14 +10,21 @@ This is the working area for the individual Internet-Draft, "Millisecond Resolut
 - **Problem.** HTTP caches measure freshness in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between.
 - **Cause.** One grammar rule, `delta-seconds` in RFC 9111.
 - **Proposal.** A `delta-milliseconds` sibling, used by the companions below. Each cache counts the time already spent upstream.
+- **Scope.** Every whole-second duration in HTTP caching, plus Retry-After and Prefer `wait`.
 - **Rollout.** Send both resolutions. Older caches use the whole-second policy. Upgraded caches use the finer values when they can account for age since the origin or the last validation, and otherwise fall back to whole seconds.
 
-| Existing | Companion |
-|---|---|
-| `max-age` | `max-age-ms` |
-| `s-maxage` | `s-maxage-ms` |
-| `stale-while-revalidate` | `stale-while-revalidate-ms` |
-| `Age` | `Age-Ms` |
+| Existing | Companion | Used in |
+|---|---|---|
+| `max-age` | `max-age-ms` | Response, request |
+| `s-maxage` | `s-maxage-ms` | Response |
+| `stale-while-revalidate` | `stale-while-revalidate-ms` | Response |
+| `stale-if-error` | `stale-if-error-ms` | Response, request |
+| `max-stale` | `max-stale-ms` | Request |
+| `min-fresh` | `min-fresh-ms` | Request |
+| `Age` | `Age-Ms` | Response field |
+| Cache-Status `ttl` | `ttl-ms` | Response parameter |
+| `Retry-After` | `Retry-After-Ms` | Response field |
+| Prefer `wait` | `wait-ms` | Request preference |
 
 A shield serving a live playlist at age 175 ms of a 200 ms lifetime sends:
 

@@ -5,7 +5,8 @@ Dave Seddon · Discussion proposal for the HTTP Working Group · [Internet-Draft
 ## Summary
 
 - **Problem.** HTTP caches count freshness and age in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between.
-- **Proposal.** Millisecond companions for max-age, s-maxage, stale-while-revalidate and the Age response field, so that each cache counts the time already spent upstream.
+- **Proposal.** Millisecond companions for the cache directives that carry a duration and for the Age response field, so that each cache counts the time already spent upstream.
+- **Scope.** Every whole-second duration in HTTP caching, plus Retry-After and Prefer `wait`. Appendix A lists each field and what we left unchanged.
 - **Rollout.** The origin sends a whole-second fallback with every companion. Older caches use the fallback.
 
 ## Sharing a freshness lifetime
@@ -44,7 +45,20 @@ Age-Ms: 175
 | `stale-while-revalidate=0` | `stale-while-revalidate-ms=200` | An additional 200 ms from expiry when serving stale is permitted |
 | `Age: 1` | `Age-Ms: 1075` | Total estimated age of 1.075 s at this hop |
 
-- The first three rows are response directives in Cache-Control or a targeted field such as CDN-Cache-Control. The last row shows two response fields.
+These four share a freshness lifetime between caches. The rest complete the set.
+
+| Existing | Proposed companion | Where | What it controls |
+|---|---|---|---|
+| `stale-if-error=1` | `stale-if-error-ms=1500` | Response or request | 1.5 s from expiry in which a stale response can be used after an error |
+| `max-age=1` | `max-age-ms=500` | Request | The client prefers a response no older than 500 ms |
+| `min-fresh=0` | `min-fresh-ms=500` | Request | The client prefers a response that stays fresh for another 500 ms |
+| `max-stale=0` | `max-stale-ms=250` | Request | The client accepts a response up to 250 ms past expiry |
+| `ttl=0` | `ttl-ms=25` | Cache-Status parameter | Diagnostic. 25 ms of freshness remained at this cache |
+| `Retry-After: 1` | `Retry-After-Ms: 250` | Response field | Retry after 250 ms. Older clients wait one second |
+| `wait=1` | `wait-ms=250` | Prefer request field | The client expects processing to take at most 250 ms |
+
+- The directives appear in Cache-Control. The response directives can also appear in a targeted field such as CDN-Cache-Control.
+- Retry-After and Prefer `wait` are not caching. The draft keeps them in a separate section that the WG can split out.
 - Each companion carries the complete value in unsigned decimal digits. The same spelling works as an Integer in a targeted dictionary. [RFC 9213 §2.1](https://www.rfc-editor.org/rfc/rfc9213.html#section-2.1) · [RFC 9651 §3.3.1](https://www.rfc-editor.org/rfc/rfc9651.html#section-3.3.1)
 - The smallest positive value is 1 ms. Appendix C considers other encodings, including an explicit unit for finer resolution.
 - The names are provisional. Appendix E has notes from a prototype.
@@ -135,6 +149,7 @@ Make the same decision independently for the stale window.
 
 - Where do you need to communicate a fractional-second lifetime between independently implemented caches? What resolution does the application need?
 - How do you establish that every cache on a path updates age? Would the whole-second fallback work where you cannot establish that?
+- Should Retry-After and Prefer `wait` stay in this document or move to their own?
 
 Per-tier age, validation outcomes and playlist discovery times would help quantify the effect on players.
 
@@ -151,24 +166,25 @@ We searched the current HTTP RFCs for whole-second durations and timestamps.
 - **Who uses delta-seconds.** RFC 9111 defines it. RFC 5861, RFC 7240, RFC 6797, RFC 7838 and RFC 9163 import it. RFC 6265 uses the name for a value that can be negative.
 - **Own rules.** Retry-After, Web Push TTL and Cache-Status ttl define whole seconds separately.
 - **No durations.** HTTP/2 and HTTP/3 define no cache durations of their own. [RFC 9113](https://www.rfc-editor.org/rfc/rfc9113.html) · [RFC 9114](https://www.rfc-editor.org/rfc/rfc9114.html)
-- **Candidates.** The same unit could serve them. Each needs a decision about who measures the interval, when it starts, and what rounding does to its guarantee.
+- **Resolution.** Every field below that carries a time has a resolution of one second. None accepts a fraction.
+- **Coverage.** The proposal gives a companion to every duration in RFC 9111, RFC 5861 and RFC 9211, and to Retry-After and Prefer `wait`. Each companion keeps the meaning of its base, including who measures the interval and when it starts.
 
 The [IANA cache directive registry](https://www.iana.org/assignments/http-cache-directives/) lists the current cache directives.
 
-| Field or directive | Treatment | Reason |
-|---|---|---|
-| Age, response max-age, s-maxage, stale-while-revalidate | In scope | These determine how a freshness lifetime is shared between caches. [RFC 9111 §§5.1, 5.2.2](https://www.rfc-editor.org/rfc/rfc9111.html#section-5.1) · [RFC 5861 §3](https://www.rfc-editor.org/rfc/rfc5861.html#section-3) |
-| stale-if-error | Candidate | Bounds staleness after a qualifying error, independently of the background-validation window. It can appear in requests and responses. [RFC 5861 §§3–4](https://www.rfc-editor.org/rfc/rfc5861.html#section-4) |
-| Request max-age, min-fresh, max-stale | Candidate | Preserve the distinction between a maximum age, a minimum remaining lifetime and an acceptable amount of staleness. Bare max-stale has no numerical limit. [RFC 9111 §5.2.1](https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.1) |
-| Cache-Status ttl | Candidate, diagnostic | Its value must be able to go negative once stale. [RFC 9211 §2.4](https://www.rfc-editor.org/rfc/rfc9211.html#section-2.4) |
-| Retry-After, Prefer wait | Possible later use | Retry-After can be a date or a minimum delay. Rounding a minimum delay down can cause an early retry. Prefer wait expresses the client's waiting budget. [RFC 9110 §10.2.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3) · [RFC 7240 §4.3](https://www.rfc-editor.org/rfc/rfc7240.html#section-4.3) |
-| Alt-Svc ma | Review separately | A related lifetime that consumes response age but governs an alternative service advertisement. [RFC 7838 §3.1](https://www.rfc-editor.org/rfc/rfc7838.html#section-3.1) |
-| immutable | No change needed | Already applies for the calculated freshness lifetime. It takes no duration argument. [RFC 8246 §2](https://www.rfc-editor.org/rfc/rfc8246.html#section-2) |
-| Date, Expires | Out of scope | Absolute timestamps require a clock and a timestamp encoding. For finer freshness use a relative lifetime. [RFC 9110 §5.6.7](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.6.7) · [RFC 9111 §5.3](https://www.rfc-editor.org/rfc/rfc9111.html#section-5.3) |
-| Last-Modified and date-based conditionals | Out of scope | Use distinct strong ETags for distinct manifest revisions within a second. [RFC 9110 §8.8](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.8) |
-| Strict-Transport-Security max-age, Expect-CT max-age, Set-Cookie Max-Age | Out of scope | Security policy and cookie retention have their own expiry rules. Zero can remove existing state. Each would need a separate compatibility analysis. [RFC 6797 §6.1.1](https://www.rfc-editor.org/rfc/rfc6797.html#section-6.1.1) · [RFC 9163 §2.1.3](https://www.rfc-editor.org/rfc/rfc9163.html#section-2.1.3) · [RFC 6265 §5.2.2](https://www.rfc-editor.org/rfc/rfc6265.html#section-5.2.2) |
-| Web Push TTL | Out of scope | It bounds how long a push service retains a message for an offline device. [RFC 8030 §5.2](https://www.rfc-editor.org/rfc/rfc8030.html#section-5.2) |
-| Signature `created` and `expires`, Structured Fields Date | Out of scope | These are absolute timestamps in integer seconds, and a Date with a fraction fails to parse. A relative lifetime avoids the need for a finer timestamp type. [RFC 9421 §2.3](https://www.rfc-editor.org/rfc/rfc9421.html#section-2.3) · [RFC 9651 §3.3.7](https://www.rfc-editor.org/rfc/rfc9651.html#section-3.3.7) |
+| Field or directive | Current resolution | Treatment | Reason |
+|---|---|---|---|
+| Age, response max-age, s-maxage, stale-while-revalidate | 1 s, delta-seconds | In scope, `-ms` companions and `Age-Ms` | These determine how a freshness lifetime is shared between caches. [RFC 9111 §§5.1, 5.2.2](https://www.rfc-editor.org/rfc/rfc9111.html#section-5.1) · [RFC 5861 §3](https://www.rfc-editor.org/rfc/rfc5861.html#section-3) |
+| stale-if-error | 1 s, delta-seconds | In scope, `stale-if-error-ms` | Bounds staleness after a qualifying error, independently of the background-validation window. It can appear in requests and responses. [RFC 5861 §§3–4](https://www.rfc-editor.org/rfc/rfc5861.html#section-4) |
+| Request max-age, min-fresh, max-stale | 1 s, delta-seconds | In scope, `-ms` companions | A player can ask for a playlist no older than 500 ms. The companions preserve the distinction between a maximum age, a minimum remaining lifetime and an acceptable amount of staleness. Bare max-stale has no numerical limit. [RFC 9111 §5.2.1](https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.1) |
+| Cache-Status ttl | 1 s, signed Integer | In scope, `ttl-ms` | Diagnostic. It shows the remaining fine lifetime at each tier. Its value must be able to go negative once stale. [RFC 9211 §2.4](https://www.rfc-editor.org/rfc/rfc9211.html#section-2.4) |
+| Retry-After, Prefer wait | 1 s, HTTP-date or delay-seconds for Retry-After, delta-seconds for wait | In scope, `Retry-After-Ms` and `wait-ms`, separable | Not caching, but the same whole-second limit, and finer `wait` was requested in 2019. Retry-After can be a date or a minimum delay. The companion carries a delay, and the sender keeps the whole-second value no earlier so that older clients do not retry early. Prefer wait expresses the client's waiting budget. [RFC 9110 §10.2.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3) · [RFC 7240 §4.3](https://www.rfc-editor.org/rfc/rfc7240.html#section-4.3) |
+| Alt-Svc ma | 1 s, delta-seconds | Review separately | A related lifetime that consumes response age but governs an alternative service advertisement. [RFC 7838 §3.1](https://www.rfc-editor.org/rfc/rfc7838.html#section-3.1) |
+| immutable | None, no argument | No change needed | Already applies for the calculated freshness lifetime. It takes no duration argument. [RFC 8246 §2](https://www.rfc-editor.org/rfc/rfc8246.html#section-2) |
+| Date, Expires | 1 s, HTTP-date | Out of scope | A finer Expires would need a new date format, a finer Date to subtract from it, and clocks agreed to the millisecond. A fractional Expires sent today is invalid and is treated as already expired. A relative lifetime with a fine age gives every cache the same expiry instant without any of these, and max-age already overrides Expires. [RFC 9110 §5.6.7](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.6.7) · [RFC 9111 §5.3](https://www.rfc-editor.org/rfc/rfc9111.html#section-5.3) |
+| Last-Modified and date-based conditionals | 1 s, HTTP-date | Out of scope | Use distinct strong ETags for distinct manifest revisions within a second. [RFC 9110 §8.8](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.8) |
+| Strict-Transport-Security max-age, Expect-CT max-age, Set-Cookie Max-Age | 1 s, delta-seconds. Cookie Max-Age can be negative | Out of scope | Security policy and cookie retention have their own expiry rules. Zero can remove existing state. Each would need a separate compatibility analysis. [RFC 6797 §6.1.1](https://www.rfc-editor.org/rfc/rfc6797.html#section-6.1.1) · [RFC 9163 §2.1.3](https://www.rfc-editor.org/rfc/rfc9163.html#section-2.1.3) · [RFC 6265 §5.2.2](https://www.rfc-editor.org/rfc/rfc6265.html#section-5.2.2) |
+| Web Push TTL | 1 s, `1*DIGIT` | Out of scope | It bounds how long a push service retains a message for an offline device. [RFC 8030 §5.2](https://www.rfc-editor.org/rfc/rfc8030.html#section-5.2) |
+| Signature `created` and `expires`, Structured Fields Date | 1 s, Integer UNIX time and SF Date | Out of scope | These bound how long a signature is accepted. They do not affect cache freshness. RFC 9421 states that sub-second precision is not supported, and a Date with a fraction fails to parse. [RFC 9421 §2.3](https://www.rfc-editor.org/rfc/rfc9421.html#section-2.3) · [RFC 9651 §3.3.7](https://www.rfc-editor.org/rfc/rfc9651.html#section-3.3.7) |
 
 ## Appendix B. Boundary cases
 
@@ -315,7 +331,64 @@ The whole-second unit entered HTTP caching in 1997 and has been carried forward 
 
 ## Appendix E. Notes for implementers
 
-A local nginx prototype implements the companions for ordinary Cache-Control. Integer parsing and the two expiry comparisons were straightforward. Most of the work concerned when a response may be reused, which age belongs to the stored representation, and how both survive validation or a restart. These cases exercise those decisions.
+A prototype for nginx implements the companions for ordinary Cache-Control. It is the `http-cache-millisecond-freshness` branch of a fork. [Branch](https://github.com/randomizedcoder/nginx/tree/http-cache-millisecond-freshness) · [Build, tests and demo](https://github.com/randomizedcoder/nginx/tree/http-cache-millisecond-freshness/contrib/subsecond-cache)
+
+### What nginx needed
+
+The change is about 690 added lines of C in seven files, plus tests. Most of it is one new file. Everything is off unless configured.
+
+| Area | Change | Lines added |
+|---|---|---|
+| [`ngx_http_cache_fine.c`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/ngx_http_cache_fine.c) (new) | Parse paired directives, establish fine age, emit `Age` and `Age-Ms`, merge a 304, evaluate request directives | 481 |
+| [`ngx_http_file_cache.c`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/ngx_http_file_cache.c) | Millisecond expiry on read. Cache file version 6 keeps birth, deadline and both stale windows in milliseconds | 69 |
+| [`ngx_http_upstream.c`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/ngx_http_upstream.c) | Call the new handler, keep the 304 headers, two ttl variables | 70 |
+| [`ngx_http_cache.h`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/ngx_http_cache.h) | Four `int64_t` fields and two inline comparisons | 38 |
+| [`ngx_http_proxy_module.c`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/modules/ngx_http_proxy_module.c) | Two directives | 30 |
+| `ngx_http_upstream.h`, `auto/sources` | Four fields, one build line | 5 |
+
+Operators see two directives and two variables, `$upstream_cache_ttl` and `$upstream_cache_ttl_ms`:
+
+```nginx
+proxy_cache_fine_time    origin;   # off | origin | trusted
+proxy_cache_fine_request on;       # honour request max-age-ms and min-fresh-ms
+```
+
+The freshness decision is the existing one with a millisecond clock:
+
+```c
+if (now < deadline) {
+    return NGX_HTTP_CACHE_HIT;
+}
+
+if (now - deadline < window) {
+    return NGX_HTTP_CACHE_UPDATING;
+}
+
+return NGX_HTTP_CACHE_EXPIRED;
+```
+
+Choosing between a companion and its base is one expression. The request directives reduce to two comparisons:
+
+```c
+lifetime = v[base + 1] >= 0 ? v[base + 1] : v[base] * 1000;
+
+return (max_age < 0 || age <= max_age)
+       && (min_fresh < 0 || remaining >= min_fresh);
+```
+
+| Companion | In the prototype |
+|---|---|
+| `max-age-ms`, `s-maxage-ms`, `stale-while-revalidate-ms`, `stale-if-error-ms` (response) | Yes |
+| `Age-Ms` | Yes, generated and consumed |
+| `max-age-ms`, `min-fresh-ms` (request) | Yes, opt-in |
+| Cache-Status `ttl-ms` | Variables for the operator to compose |
+| `max-stale-ms`, `stale-if-error-ms` (request) | No |
+| Targeted fields such as CDN-Cache-Control | No |
+| `Retry-After-Ms`, Prefer `wait-ms` | Forwarded. nginx does not generate or act on either |
+
+### What took the effort
+
+Integer parsing and the expiry comparisons were straightforward. Most of the work concerned when a response may be reused, which age belongs to the stored representation, and how both survive validation or a restart. These cases exercise those decisions.
 
 **Headers arrive in a different order.** [nginx cache-control tests](https://github.com/nginx/nginx-tests/blob/master/proxy_cache_control.t)
 

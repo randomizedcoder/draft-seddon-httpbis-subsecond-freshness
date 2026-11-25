@@ -22,3 +22,4 @@ draft-seddon-httpbis-subsecond-freshness.xml
 package-lock.json
 report.xml
 !requirements.txt
+!/rfcs/*.txt

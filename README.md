@@ -4,6 +4,7 @@ This is the working area for the individual Internet-Draft, "Millisecond Resolut
 
 - [Internet-Draft source](draft-seddon-httpbis-subsecond-freshness.md)
 - [Explainer with deployment examples, alternatives and background](explainer.md)
+- [Text copies of the referenced RFCs and drafts, for local searching](rfcs/README.md)
 
 ## Summary
 

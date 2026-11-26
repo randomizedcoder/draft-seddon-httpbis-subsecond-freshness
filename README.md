@@ -11,12 +11,13 @@ This is the working area for the individual Internet-Draft, "Millisecond Resolut
 
 - **Problem.** HTTP expresses freshness and age in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between.
 - **Cause.** One grammar rule, `delta-seconds` in RFC 9111. The limit is in the wire format, not in every implementation.
-- **Today.** We read the source of eleven browser engines and caches. Chromium, WebKit and Varnish already decide freshness at sub-second resolution. Three more store a finer time and round it to seconds. Five use whole seconds throughout. None can be told a sub-second lifetime in a standard way, and every cache sends `Age` in whole seconds. [Survey](explainer.md#what-implementations-do-today)
+- **Today.** We read the source of eleven browser engines and caches. Chromium, WebKit and Varnish already decide freshness at sub-second resolution. Three more store a finer time and round it to seconds. Five use whole seconds throughout. None can be told a sub-second lifetime in a standard way, and those that emit `Age` use whole seconds; the nginx baseline emits none. [Survey](explainer.md#what-implementations-do-today)
 - **Aim.** Let the wire format carry what those implementations already measure, and give the rest a defined target.
 - **Proposal.** A `delta-milliseconds` sibling, used by the companions below. Each cache counts the time already spent upstream.
 - **Scope.** Every whole-second duration in HTTP caching, plus Retry-After and Prefer `wait`.
 - **Browsers.** No change is required. A browser applies the whole-second policy, as it does today. [Browsers](explainer.md#browsers)
-- **Rollout.** Send both resolutions. Older caches use the whole-second policy. Upgraded caches use the finer values when they can account for age since the origin or the last validation, and otherwise fall back to whole seconds.
+- **Rollout.** Send both resolutions. Older caches use the whole-second policy. Upgraded caches require a configured supporting path and accountable elapsed time. Losing fine metadata restores the base, which can allow longer reuse. Choose that fallback deliberately.
+- **Evidence.** The nginx prototype has documented conformance gaps; the measurements are implementation-specific observations, not proof of a delivery-age bound or a gain over every conforming cache. [Conformance](explainer.md#prototype-conformance) · [Provenance](measurements.md#revisions-and-retained-results)
 
 | Existing | Companion | Used in |
 |---|---|---|
@@ -44,7 +45,7 @@ Age-Ms: 175
 - MoQ relays already cache in integer milliseconds.
 - HLS and DASH over HTTP caches remain the deployed base for large live events.
 - Millisecond freshness would let those services use their existing caches closer to the same timescales. We think this would keep HTTP a practical choice for latency-sensitive delivery.
-- The effect on players is still to be measured.
+- With simulated players, a 200 ms playlist lifetime found new segments as soon as `max-age=0`, for a fifth of the origin requests. Real players are still to be measured. [Test 8](measurements.md#test-8-simulated-hls-players)
 
 ## Building the draft
 

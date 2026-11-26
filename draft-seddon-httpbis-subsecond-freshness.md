@@ -77,9 +77,9 @@ every implementation. Among eleven browser engines and caches whose source
 was examined in November 2026, three compared age with the freshness
 lifetime at sub-second resolution, three more stored times at a finer
 resolution and rounded them to seconds, and five used whole seconds
-throughout. Every cache among them generated the Age field in whole
-seconds, and an origin server has no standard way to state a sub-second
-lifetime to any of them. This document allows the protocol to carry the
+throughout. Those that generated Age used whole seconds; the surveyed
+nginx baseline did not generate it. An origin server has no standard way
+to state a sub-second lifetime to any of them. This document allows the protocol to carry the
 resolution that some implementations already have.
 
 Some resources change more often than that. A live HTTP Live Streaming media
@@ -202,13 +202,14 @@ carried in a Cache-Control directive, in a targeted cache control field
 {{RFC9213}} and in the Age-Ms field. The largest value is a little over
 31,000 years.
 
-One millisecond is the finest decimal unit in which the whole delta-seconds
-range fits within that limit. The 2^31 seconds at which
-{{Section 1.2.2 of RFC9111}} saturates is 2,147,483,648,000 milliseconds,
-which has thirteen digits. Fifteen digits of microseconds cover less than
-32 years, and fifteen digits of nanoseconds less than 12 days. A companion
-in a finer unit could therefore not express every value of its base as a
-Structured Fields Integer.
+This range includes 2^31 seconds, the overflow value described in
+{{Section 1.2.2 of RFC9111}}, as 2,147,483,648,000 milliseconds. That
+overflow treatment is not a universal maximum for delta-seconds, whose
+grammar has no digit limit. This extension has its own explicit range.
+Fifteen digits of microseconds cover less than 32 years, and fifteen
+digits of nanoseconds less than 12 days; neither includes the 2^31-second
+overflow value. Milliseconds balance resolution and range without requiring
+units or decimal arithmetic on the wire.
 
 A recipient parsing a delta-milliseconds value and converting it to binary
 form needs an arithmetic type of at least 50 bits of non-negative integer
@@ -498,6 +499,12 @@ condition holds, and neither does a secured connection to the sender. An
 implementing cache MUST NOT rely on fine age for a path whose accounting
 properties are unknown.
 
+A cache identifies a fine-age source by the upstream it has been
+configured to contact. It MUST NOT infer that a sender is a fine-age source
+from the content of a message, such as a Via or Cache-Status field or the
+presence of Age-Ms. A cache MUST ignore an Age-Ms field in a request, and
+in a trailer section.
+
 The configuration also identifies whether the sender is an origin server
 or an implementing cache. When a response is received from a fine-age
 source, the cache determines a fine age_value as follows:
@@ -522,6 +529,22 @@ A recipient applies the second case to the complete field values as
 received, before any recovery that discards additional Age members
 ({{Section 5.1 of RFC9111}}). When the response has no fine age_value,
 that recovery remains available for the Age field.
+
+The following table summarises selection and fallback. It adds no
+requirements; the receiving rules above and {{fine-age}} govern.
+
+| Sender or condition | Fine-age result | Policy and forwarding consequence |
+|---------------------|-----------------|-----------------------------------|
+| Configured origin server; neither age field present | Initial age_value is zero | Fine directives can be selected while elapsed time remains accountable. |
+| Configured implementing cache; one valid field line of each age field, with the required consistency | Initial age_value is Age-Ms | Fine directives can be selected while elapsed time remains accountable. |
+| Configured cache; either or both age fields absent | No fine age_value | Apply the base policy; remove any unused Age-Ms. |
+| Malformed, repeated or inconsistent age fields | No fine age_value | Apply the base policy; ordinary Age recovery remains available. A comma in a valid Item parameter is not a repeated value. |
+| Unknown path or unconfigured sender, even with a consistent pair | No fine age_value | Apply the base policy; remove unused Age-Ms. |
+| Elapsed-time accounting becomes uncertain | Fine age is lost | Cease fine selection and apply the base policy as described in {{fine-age}}. |
+
+Fallback is to the sender-selected base, which can permit longer reuse
+than the fine policy. A consistent pair does not prove correct accounting
+across the path ({{sec-age}}, {{sec-fallback}}).
 
 When a response is received from any other sender, or has no fine
 age_value, the cache has no fine age for that response. It processes the
@@ -975,6 +998,28 @@ defended against today.
 An Age-Ms value that overstates the age causes additional validation
 requests, as an overstated Age value does today.
 
+An operator can count how often a cache falls back to the base policy or
+rejects a pair of age values. A change in either rate can indicate that a
+path has changed.
+
+## Unprotected Hops {#sec-hop}
+
+A party that can alter messages between two caches of a configured path
+can lower Age-Ms and Age together, and the pair remains consistent. The
+same party can already alter Age and Cache-Control. Sub-second lifetimes do
+not add to that capability, but the configuration of a fine-age source
+asserts that the path accounts for age. An unprotected hop leaves that
+accounting vulnerable to alteration.
+
+Protecting against such alteration requires message integrity and
+authentication of the configured upstream at each hop, for example TLS
+with peer verification. An isolated network can be part of a deployment's
+threat model, but calling a network private does not by itself establish
+either property. Connection protection also does not establish correct
+age accounting by the authenticated peer. A fine-age source is identified
+by configuration and never by message content ({{receive}}), so a client
+or an unrelated server cannot nominate itself.
+
 ## Loss of Fine Metadata {#sec-fallback}
 
 An attacker or a fault that removes Age-Ms, or invalidates a fine
@@ -985,8 +1030,10 @@ This grants nothing that the sender did not send. The sender is required to
 choose a base that it accepts on every path ({{pairing}}), and a legacy
 cache applies that base in any case. A sender that cannot accept more than
 its fine lifetime sends a base of zero ({{base-policy}}). A base of zero
-still permits storage and validation; a sender that needs neither uses
-no-store or no-cache as it does today.
+still permits storage and validation. The unqualified no-cache directive
+requires successful validation before reuse; no-store prohibits storage,
+as specified in {{Section 5.2.2 of RFC9111}}. Neither is interchangeable
+with a duration.
 
 Removing both age fields does not make a response appear new to a cache
 that receives it from another cache: a missing pair from a cache gives no
@@ -1064,6 +1111,44 @@ the finer timing visible.
 
 What remains: neither the finer fields nor their omission guarantees
 privacy. Response timing itself can reveal cache state, as it does today.
+
+## Deployment Checklist {#sec-checklist}
+
+This section summarises the requirements and deployment choices above; it
+adds none. The checks concern the actual serving path, including failover.
+Independently operated services can participate when the same accounting
+and protection assumptions hold.
+
+Confirm that each of the following is true:
+
+| Check | What to verify |
+|-------|----------------|
+| The fallback is chosen | The sender accepts each base value and stale permission at every cache. Where no whole-second lifetime is acceptable, the base is zero ({{base-policy}}, {{sec-fallback}}). |
+| The path is configured | Configuration covers every component that can retain or rewrite age, including failover routes ({{receive}}). |
+| The origin is marked correctly | A sender is configured as an origin server only for the origin exchange described in {{receive}}. |
+| Hops are protected | Each hop protects message integrity and authenticates its upstream. Any reliance on network isolation is written down ({{sec-hop}}). |
+| Policy rewriters know the companions | Each component that changes a duration to enforce policy also handles the companion in the same field ({{rewriting}}). |
+| Clock events are handled | After a clock step, suspend, restart or restore, the cache accounts for the elapsed time or returns to the base policy ({{fine-age}}). |
+| The lifetime is assessed | The fine lifetime has been compared with validation latency and origin capacity ({{choosing}}). |
+| Bursts are assessed | The effect of synchronised expiry is known, and request collapsing or a stale window is used where needed ({{synchronised}}). |
+| Fallback is recorded | Rejected age pairs and fallback to the base policy are counted. These counts do not authenticate age ({{sec-age}}). |
+| Diagnostics are placed | Age-Ms and ttl-ms are sent where they are useful and omitted elsewhere ({{sec-privacy}}). |
+| Units are checked | Each fine value is in milliseconds; 300 seconds is `300000` ({{mismatch}}). |
+
+Confirm that none of the following is true:
+
+| Check | What to verify |
+|-------|----------------|
+| Fine age is on by default | No cache treats every upstream, or an upstream chosen by a wildcard, as a fine-age source ({{receive}}). |
+| Trust is inferred | No cache accepts fine age because a pair is consistent, the peer is authenticated, or a field names the sender ({{sec-age}}). |
+| A legacy hop is inside the path | No legacy cache or unlisted intermediary sits between configured caches, including after a failover ({{sec-age}}). |
+| A companion was added to an old base | No field has a fine value beside a longer base that was not reviewed, such as `max-age=60, max-age-ms=200` ({{mismatch}}). |
+| A fine directive stands alone | No field carries a fine directive without its base ({{pairing}}). |
+| A duration stands in for a restriction | No response relies on a fine directive, or on `max-age=0`, where no-store, no-cache or private is needed ({{sec-fallback}}). |
+| An origin sends Age-Ms | No origin server generates Age-Ms, and no cache forwards an Age-Ms value it did not use ({{generate}}, {{receive}}). |
+| Age is rounded down or jittered | No cache lowers or randomises Age-Ms; coarsening rounds up, with both age fields from one estimate ({{generate}}). |
+| Freshness is treated as a deadline | No application treats a fine lifetime as a limit on delivery age or as evidence that data is current ({{timeliness}}). |
+| A retry hint replaces client limits | No client drops its own backoff, attempt or concurrency limits because of Retry-After-Ms ({{sec-retry}}). |
 
 # IANA Considerations
 
@@ -1238,29 +1323,26 @@ changed by this document.
 
 This section is to be removed before publication.
 
-A prototype for nginx implements fine directives in Cache-Control and the
-Age-Ms field for responses with a 200 status code. It implements:
+An opt-in nginx prototype at commit
+`9198f9a28f58b8afc8c06817f51175b4fbeea786` implements the four response
+companions in ordinary Cache-Control for eligible 200 responses, Age-Ms,
+the max-age-ms and min-fresh-ms request directives, and variables for
+composing ttl and ttl-ms diagnostics. It is an experiment, not a claim of
+complete conformance.
 
-- the max-age-ms, s-maxage-ms, stale-while-revalidate-ms and
-  stale-if-error-ms response directives;
-- the max-age-ms and min-fresh-ms request directives, when enabled by
-  configuration; and
-- variables from which an operator can compose the ttl and ttl-ms
-  Cache-Status parameters.
+Known gaps include targeted fields, the remaining request companions,
+Age-Ms Item parameters and fine stale windows with Expires-only freshness.
+Wall-clock deadlines with a 10 millisecond offset-change guard do not meet
+all the elapsed-time requirements in {{fine-age}}. The prototype retires a
+fine disk entry after validation, causing a later refill; this is not a
+requirement of the protocol. Retry-After-Ms and wait-ms are forwarded
+without being acted on.
 
-It does not yet implement the fine directives in targeted fields, or the
-max-stale-ms and stale-if-error-ms request directives. It forwards
-Retry-After-Ms and wait-ms without acting on them.
-
-The prototype differs from this document in three ways. It records the time
-a response was stored using a wall clock, and discards the fine age when
-the difference between that clock and a monotonic clock moves by more than
-10 milliseconds, or after a restart. It does not detect a smaller step, or
-a restored snapshot that rolls both clocks back together ({{fine-age}}).
-It applies a fine stale window only to a response whose
-freshness lifetime comes from max-age or s-maxage, and not to one whose
-lifetime comes from Expires. It rejects an Age-Ms value that carries
-parameters, where this document ignores the parameters.
+The companion explainer maintains the detailed conformance and evidence
+table at <https://github.com/randomizedcoder/draft-seddon-httpbis-subsecond-freshness/blob/main/explainer.md#prototype-conformance>.
+Reported checks and application measurements are separate from the
+specification's requirements. There is no independent-cache interoperability
+result or native curl implementation.
 
 # Acknowledgements
 {:numbered="false"}

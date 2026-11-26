@@ -9,9 +9,9 @@ Dave Seddon · Discussion proposal for the HTTP Working Group · [Internet-Draft
 - **Aim.** Let the wire format carry what those implementations already measure, and give the rest a defined target.
 - **Proposal.** Millisecond companions for the cache directives that carry a duration and for the Age response field, so that each cache counts the time already spent upstream.
 - **Scope.** Every whole-second duration in HTTP caching, plus Retry-After and Prefer `wait`. Appendix A lists each field and what we left unchanged.
-- **Rollout.** The origin sends a whole-second fallback with every companion. Older caches use the fallback.
+- **Rollout.** The origin sends a deliberate whole-second fallback with every companion. Fine selection requires a configured supporting path and accountable elapsed time. Losing fine metadata restores the base, which can allow longer reuse.
 - **Browsers.** No change is required. A browser applies the whole-second fallback. [Browsers](#browsers)
-- **Measured.** Through five nginx caches, responses under `max-age=1` averaged 999 ms behind the origin, and 48 ms under `max-age-ms=100`. [Practical tests](measurements.md)
+- **Measured.** Through five nginx caches, `max-age=1` averaged 999 ms behind origin generation, versus 48 ms with a paired 100 ms policy. This changes both lifetime and accounting; the baseline does not apply upstream Age. These are implementation observations. [Practical tests and limitations](measurements.md)
 
 HTTP already carries upstream age across cache tiers. A new lifetime at each tier is not its intended behaviour. The proposal adds a sub-second lifetime and preserves fractional age on a configured path; it does not repair arbitrary Age handling or guarantee the age of the underlying application data. [RFC 9111 §4.2.3](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.3)
 
@@ -33,7 +33,8 @@ Age-Ms: 175
 
 - **Scale.** Consider an event serving 30–40 million viewers, with hundreds of millions of HTTP requests per second across all object types. These are workload estimates. For a published comparison, Tubi reported a peak of 15.5 million concurrent streaming viewers during Super Bowl LIX. [Tubi’s event report](https://corporate.tubitv.com/press/4545/)
 - **Why the manifest matters.** Caches serve many players from one playlist refresh. A player that reloads just before the cache refreshes can receive a playlist that omits an already available segment. It may then wait another reload interval to discover it. [RFC 8216 §6.3.4](https://www.rfc-editor.org/rfc/rfc8216.html#section-6.3.4)
-- **What to test.** A player that requests a segment 500 ms earlier has 500 ms more before the same playback deadline. On a slow or variable connection, that margin could let the download finish before the buffer runs dry. We have yet to measure how often players gain that much or how often it prevents a stall. Compare segment request and completion times, rebuffer events and origin playlist requests under both cache policies.
+- **What to test.** A player that requests a segment 500 ms earlier has 500 ms more before the same playback deadline. On a slow or variable connection, that margin could let the download finish before the buffer runs dry. We have yet to measure how often real players gain that much or how often it prevents a stall. Compare segment request and completion times, rebuffer events and origin playlist requests under both cache policies.
+- **First result.** Twenty simulated players through two nginx caches found a new segment within 968 ms at the 95th percentile under `max-age=0, max-age-ms=200`, and within 2241 ms under `max-age=1`. `max-age=0` matched the 200 ms figure, with five times the origin requests. [Test 8](measurements.md#test-8-simulated-hls-players)
 
 ### Relationship to Media over QUIC
 
@@ -79,9 +80,9 @@ delta-milliseconds = 1*15DIGIT
 
 - **Meaning.** A non-negative integer number of milliseconds. It gives the complete duration and is never added to a delta-seconds value.
 - **Range.** Fifteen digits is the Structured Fields Integer limit, about 31,700 years. The same value therefore parses in Cache-Control and in a targeted dictionary. [RFC 9651 §3.3.1](https://www.rfc-editor.org/rfc/rfc9651.html#section-3.3.1)
-- **Why milliseconds.** It is the finest decimal unit in which the whole delta-seconds range fits a Structured Fields Integer. The 2^31-second ceiling is 13 digits of milliseconds. Fifteen digits of microseconds cover under 32 years, and of nanoseconds under 12 days.
-- **Arithmetic.** RFC 9111 suggests at least 31 bits for delta-seconds. In milliseconds, 31 bits last under 25 days. A recipient needs 41 bits for the 2^31-second ceiling and 50 bits for the whole 15-digit range. A 64-bit integer covers both.
-- **Overflow.** A delta-seconds value that is too large is treated as 2^31 seconds. A companion always arrives with a whole-second base, so we propose that a recipient rejects an unrepresentable value and uses the base. The WG may prefer the saturating rule for consistency.
+- **Why milliseconds.** The range includes the 2^31-second overflow value described in RFC 9111, using 13 millisecond digits. That is not a universal ceiling: delta-seconds has no digit limit. Fifteen digits of microseconds cover under 32 years, and of nanoseconds under 12 days; neither includes that overflow value. The new field has its own bounded range.
+- **Arithmetic.** RFC 9111 suggests at least 31 bits for delta-seconds. In milliseconds, 31 bits last under 25 days. A recipient needs 41 bits for that 2^31-second overflow value and 50 bits for the whole 15-digit range. A 64-bit integer covers both.
+- **Overflow.** RFC 9111 specifies 2^31 seconds (or another conveniently large positive value) for overflow in a recipient's conversion. The draft instead rejects a fine value outside its explicit syntax/range and uses the base. A valid 15-digit value still needs checked conversion to timer units; a narrow timer must not silently shorten a retry or lengthen reuse.
 - **Age calculation.** RFC 9111 defines it as clock differences. Only the Age field value and the freshness lifetime are tied to seconds, so the same steps work in milliseconds. [RFC 9111 §4.2.3](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.3)
 
 ## Cache behaviour
@@ -129,7 +130,7 @@ Make the same decision independently for the stale window.
 | Response path | What the receiving cache does |
 |---|---|
 | Any sender → older cache | Uses the existing directives and ordinary Age processing. Fine directives confer no extra permission. |
-| Origin → upgraded cache | Calculates age from the generation or validation exchange and its own elapsed time. Applies valid paired fine directives. |
+| Configured origin → upgraded cache, with neither age field present | Starts age_value at zero for that origin exchange, adds request delay and residence, and can select valid paired fine directives. An absent pair from a cache does not qualify. |
 | Upgraded shield → upgraded edge on a known supporting path | Uses the shield's fine age as the upstream age, adds request delay and local residence, and regenerates both Age fields on reuse. |
 | Older or unknown hop → upgraded cache | Uses ordinary Age processing and the whole-second policy. Drops any fine-age field on forwarding or reuse. Resumes reporting fine age once it can establish age again, for example by validating directly with the origin. |
 
@@ -215,14 +216,16 @@ What the survey shows:
 - **Three of eleven already decide freshness at sub-second resolution**: Chromium, WebKit and Varnish. In those, the wire format is the coarsest part. Three more store a finer type and round to seconds before comparing.
 - **Five are whole seconds throughout.** For them the proposal is new work, not catching up. Firefox, nginx, Squid, Traffic Server and HAProxy are in this group.
 - **No implementation can be told a sub-second lifetime by an origin in a standard way.** Operators who want one today use private configuration. Varnish documents millisecond durations in VCL, and Fastly documents a duration type with an `ms` suffix. Cloudflare and CloudFront document a minimum of one second.
-- **Every cache sends `Age` in whole seconds**, including Varnish, which knows the fraction and discards it. This is the precision the proposal carries between tiers.
+- **Those that emit `Age` use whole seconds**, including Varnish, which knows the fraction and discards it. The nginx baseline emits none. The proposal carries fractional age between participating tiers; it is not a general repair for missing Age handling.
 - **A fractional `max-age` has four different outcomes** across these implementations: used, truncated to zero, directive ignored, or response not cached. That is the evidence for a separate companion with a valid base, and against decimal seconds.
 
 So the accurate statement is narrower than "implementations are already sub-second". Some widely used ones are, most are not, and none of them can agree on a sub-second lifetime because HTTP has no way to express one.
 
-Limits of the survey: it is a source read on one date, not a test. Not confirmed: whether Fastly's cache honours a sub-second lifetime. The CDN figures come from public documentation only.
+Limits of the survey: it is a source read, not an interoperability or shipping-product test. Not confirmed: whether Fastly's cache honours a sub-second lifetime. The CDN figures come from public documentation only.
 
-Sources: Varnish [`cache_rfc2616.c`](https://github.com/varnishcache/varnish-cache/blob/master/bin/varnishd/cache/cache_rfc2616.c), [VCL durations](https://varnish-cache.org/docs/trunk/reference/vcl.html) · Squid [`refresh.cc`](https://github.com/squid-cache/squid/blob/master/src/refresh.cc) · Traffic Server [`MIME.cc`](https://github.com/apache/trafficserver/blob/master/src/proxy/hdrs/MIME.cc) · HAProxy [`cache.c`](https://github.com/haproxy/haproxy/blob/master/src/cache.c) · Envoy [`cache_headers_utils.cc`](https://github.com/envoyproxy/envoy/blob/main/source/extensions/filters/http/cache/cache_headers_utils.cc) · httpd [`cache_util.c`](https://github.com/apache/httpd/blob/trunk/modules/cache/cache_util.c) · Souin [`pkg/rfc`](https://github.com/darkweak/souin/tree/master/pkg/rfc) · nginx [`ngx_http_upstream.c`](https://github.com/nginx/nginx/blob/master/src/http/ngx_http_upstream.c). Browser sources are listed in the next section.
+Source provenance is recorded in [survey-sources.csv](survey-sources.csv): repository path, source URL, recovered commit where available, and SHA-256 and Git blob identities of retained source files. The WebKit files were byte-matched against commit `653d68255fdfb2e61001c00bfe40714b3f23f7a6`; the nginx baseline is `2e8440bcdc438f0f1cd03da778a3843ddb3c86d9`. Other original reads did not retain a commit identifier. Their moving-branch links below are navigation aids, not immutable evidence; the hashes identify the reviewed bytes but do not establish a repository revision. Recovering those commits or repeating the survey at pinned revisions remains open. No current branch head is substituted for an unrecorded historical revision.
+
+Sources: Varnish [`cache_rfc2616.c`](https://github.com/varnishcache/varnish-cache/blob/master/bin/varnishd/cache/cache_rfc2616.c), [VCL durations](https://varnish-cache.org/docs/trunk/reference/vcl.html) · Squid [`refresh.cc`](https://github.com/squid-cache/squid/blob/master/src/refresh.cc) · Traffic Server [`MIME.cc`](https://github.com/apache/trafficserver/blob/master/src/proxy/hdrs/MIME.cc) · HAProxy [`cache.c`](https://github.com/haproxy/haproxy/blob/master/src/cache.c) · Envoy [`cache_headers_utils.cc`](https://github.com/envoyproxy/envoy/blob/main/source/extensions/filters/http/cache/cache_headers_utils.cc) · httpd [`cache_util.c`](https://github.com/apache/httpd/blob/trunk/modules/cache/cache_util.c) · Souin [`pkg/rfc`](https://github.com/darkweak/souin/tree/master/pkg/rfc) · nginx [`ngx_http_upstream.c`](https://github.com/nginx/nginx/blob/2e8440bcdc438f0f1cd03da778a3843ddb3c86d9/src/http/ngx_http_upstream.c). Browser sources are listed in the next section.
 
 ## Browsers
 
@@ -253,7 +256,7 @@ The facts were read from each engine's source tree on 24 November 2026. They are
 | Acts on `Retry-After` | A few internal services only | Not in the network stack | No handling found |
 | Cache partitioned by site | Since Chrome 86 | Since Firefox 85 | Yes |
 | Script timer resolution | 100 µs; 5 µs when isolated | 1 ms; 20 µs when isolated | 1 ms; 20 µs when isolated |
-| **Work to apply `max-age-ms`** | Small: parser | Large: parser, storage and every comparison | Small: parser |
+| **Likely areas affected by opt-in support** | Both parsers, selection, age accounting and validation | Parsers, storage, comparisons and age accounting | Parser, selection, request delay and age accounting |
 | **Work to keep a fine age** | Elapsed-time accounting | The above, plus elapsed-time accounting | Elapsed-time accounting and request delay |
 | **Most likely objection** | Two parsers to keep in step; little local benefit | Cost of leaving whole seconds | Already accepts a fraction; why a new name? |
 
@@ -286,7 +289,7 @@ Covers Chrome. Browsers built on Chromium, such as Edge, share this network stac
 
 **If Chromium chose to support it**
 
-- Applying `max-age-ms` is a parser change. The arithmetic and storage are already fine enough.
+- Existing arithmetic and storage have sub-second resolution, but opt-in support also needs companion selection, configured-source rules, elapsed-time handling and validation behavior. A parser change alone does not establish conformance.
 - Both parsers would need the same rule, or the renderer and network cache would disagree on freshness.
 - A fine age needs more. Age is measured with the wall clock, and a backward step extends freshness. The draft's accounting rule is stricter than that.
 
@@ -295,7 +298,7 @@ Covers Chrome. Browsers built on Chromium, such as Edge, share this network stac
 - `Cache-Control` is readable by cross-origin script, so `max-age-ms` would be visible. `Age-Ms` is not readable unless the server exposes it.
 - Script timers resolve 100 µs, or 5 µs when isolated, with jitter. Both are finer than the new field.
 
-**Assessment.** Lowest cost of the three and no risk from doing nothing. Expect "little local benefit" and "two parsers" as the objections.
+**Assessment.** Existing time types may reduce the storage work, but no implementation-cost estimate is demonstrated. Retaining current behavior applies the base. Expect "little local benefit" and "two parsers" as objections.
 
 Sources: [`http_response_headers.cc`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/http/http_response_headers.cc) · [`http_response_info.cc`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/http/http_response_info.cc) · [`http_cache.h`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/http/http_cache.h) · [`http_cache_util.cc`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/http/http_cache_util.cc) · [`resource_fetcher.cc`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc) · [`http_parsers.cc`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/platform/network/http_parsers.cc)
 
@@ -335,7 +338,7 @@ Not confirmed: that the renderer parser accepts a fraction end to end; any earli
 
 - Script timers resolve 1 ms by default, 20 µs when isolated, and 16.7 ms or coarser with fingerprinting resistance. At the default, the new field is no finer than the timer.
 
-**Assessment.** No risk from doing nothing, and the highest cost to support. Expect the objection to be that cost. The proposal should not depend on Firefox support, and does not.
+**Assessment.** Retaining current behavior applies the base. Whole-second storage and comparisons imply broader changes than in the other surveyed engines, but no total cost estimate is demonstrated. The proposal does not depend on Firefox opting in.
 
 Sources: [`nsHttpResponseHead.cpp`](https://searchfox.org/firefox-main/source/netwerk/protocol/http/nsHttpResponseHead.cpp) · [`CacheControlParser.cpp`](https://searchfox.org/firefox-main/source/netwerk/protocol/http/CacheControlParser.cpp) · [`nsHttp.cpp`](https://searchfox.org/firefox-main/source/netwerk/protocol/http/nsHttp.cpp) · [`nsICacheEntry.idl`](https://searchfox.org/firefox-main/source/netwerk/cache2/nsICacheEntry.idl) · [`CacheEntry.cpp`](https://searchfox.org/firefox-main/source/netwerk/cache2/CacheEntry.cpp) · [`SharedSubResourceCache.h`](https://searchfox.org/firefox-main/source/layout/style/SharedSubResourceCache.h) · related test flakiness from whole-second granularity: [bug 1762147](https://bugzilla.mozilla.org/show_bug.cgi?id=1762147)
 
@@ -369,7 +372,7 @@ Safari's HTTP cache is WebKit's own network cache, which is open source. The sys
 
 **If WebKit chose to support it**
 
-- Applying `max-age-ms` is a parser change. Arithmetic and storage are already fine enough.
+- Existing arithmetic and storage have sub-second resolution. Opt-in support would also need selection, configured-source rules, consistent age generation and validation behavior; it is not just a parser change.
 - A fine age needs more: the request delay that RFC 9111 adds to age, and elapsed-time accounting. Age uses the wall clock only; records dated in the future are discarded, and we found no other guard.
 - Without request coalescing, several simultaneous `fetch()` calls for an expired entry may each go to the network. This is the one place we found where a short lifetime could multiply local requests. It is our inference from not finding coalescing, not a test.
 
@@ -377,9 +380,9 @@ Safari's HTTP cache is WebKit's own network cache, which is open source. The sys
 
 - Script timers resolve 1 ms, or 20 µs when isolated. At the default, the new field is no finer than the timer.
 
-**Assessment.** No risk from doing nothing, and a low cost to support. Expect the objection "we already accept a fraction". The answer is that no other implementation we read does the same with it.
+**Assessment.** Retaining current behavior applies the base. Existing fine time types do not establish a low total implementation cost. Expect "we already accept a fraction"; other surveyed implementations do not handle that fraction the same way.
 
-Sources: [`CacheValidation.cpp`](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/platform/network/CacheValidation.cpp) · [`NetworkCache.cpp`](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/NetworkProcess/cache/NetworkCache.cpp) · [`CachedResourceLoader.cpp`](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/loader/cache/CachedResourceLoader.cpp) · [`AsyncRevalidation.cpp`](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/NetworkProcess/cache/AsyncRevalidation.cpp) · [`NetworkSessionCocoa.mm`](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/NetworkProcess/cocoa/NetworkSessionCocoa.mm) · [stale-while-revalidate bug 201461](https://bugs.webkit.org/show_bug.cgi?id=201461)
+Sources: [`CacheValidation.cpp`](https://github.com/WebKit/WebKit/blob/653d68255fdfb2e61001c00bfe40714b3f23f7a6/Source/WebCore/platform/network/CacheValidation.cpp) · [`NetworkCache.cpp`](https://github.com/WebKit/WebKit/blob/653d68255fdfb2e61001c00bfe40714b3f23f7a6/Source/WebKit/NetworkProcess/cache/NetworkCache.cpp) · [`CachedResourceLoader.cpp`](https://github.com/WebKit/WebKit/blob/653d68255fdfb2e61001c00bfe40714b3f23f7a6/Source/WebCore/loader/cache/CachedResourceLoader.cpp) · [`AsyncRevalidation.cpp`](https://github.com/WebKit/WebKit/blob/653d68255fdfb2e61001c00bfe40714b3f23f7a6/Source/WebKit/NetworkProcess/cache/AsyncRevalidation.cpp) · [`NetworkSessionCocoa.mm`](https://github.com/WebKit/WebKit/blob/653d68255fdfb2e61001c00bfe40714b3f23f7a6/Source/WebKit/NetworkProcess/cocoa/NetworkSessionCocoa.mm) · [stale-while-revalidate bug 201461](https://bugs.webkit.org/show_bug.cgi?id=201461)
 
 Not confirmed: behaviour of shipping Safari; suspend handling; how Safari's native HLS playback caches, which is handled by the system media stack.
 
@@ -417,8 +420,8 @@ The rule that limits fine age to a configured path suits a CDN. A browser has no
 
 | Option | Effect | Assessment |
 |---|---|---|
-| **Leave as is** (recommended for now) | Browsers apply the base. No change, no new risk. | Honest and cheap. The benefit stays in shared caches. |
-| Pessimistic age | A private cache without a trusted `Age-Ms` assumes the worst the whole-second Age allows: `Age: 0` means up to 999 ms. | Safe, but most sub-second lifetimes are then stale on arrival. |
+| **Leave as is** (recommended for now) | Browsers apply the base without opting in. | Keeps the current scope; potential benefits are at supporting cache tiers. |
+| Conservative allowance for truncation | Add an allowance to ordinary Age before considering a fine lifetime. | An allowance for one truncation does not bound hidden residence across an unknown path. It needs a separate correctness argument and is not specified here. |
 | Origin vouches for the path | Some signal that every cache on the path keeps fine age. | Most useful to browsers. Hard to make trustworthy: a secured connection and a consistent pair do not prove it. |
 
 We recommend leaving the draft as is and asking the browser teams whether they want more.
@@ -491,7 +494,7 @@ Most of these would be accidents. Each has a defined outcome, and the prototype'
 | `max-age=1, max-age-ms=2000` ✓ | Deliberate, or a slip | 2 s on a supporting path. 1 s elsewhere. | The values are independent. Supporting caches reuse for longer, as asked. |
 | `max-age=0, max-age-ms=86400000` ✓ | Deliberate: no reuse at older caches | One day on a supporting path. No fresh lifetime elsewhere. | Same reasoning. This is no different from a long `max-age` today. |
 | `max-age=1, max-age-ms=1000` ✓ | Wanting exact accounting | One second, counted in milliseconds. | Legal, and useful: in nginx it halved the measured staleness. |
-| `max-age-ms=300` meant as seconds | Unit slip | 300 ms where used. A thousand times the origin requests. | The name carries the unit. A cache cannot detect it. Typing `max-age=0` by mistake has the same exposure today. |
+| `max-age-ms=300` meant as seconds | Unit slip | 300 ms where used; potentially much more origin traffic, depending on demand and coalescing. | The name carries the unit. A cache cannot detect it. Typing `max-age=0` by mistake has the same exposure today. |
 | `max-age-ms=200` with no `max-age` ✓ | Base forgotten | Companion ignored. RFC 9111 applies as if it were absent. | Never treated as zero or as a lifetime on its own, so older and newer caches agree. |
 | Base in Cache-Control, companion in CDN-Cache-Control | Split across fields | Companion ignored. | A pair must be in the same field. |
 | `s-maxage=1, max-age=0, max-age-ms=200` ✓ | Stale `s-maxage` left in place | Shared caches use one second. | `s-maxage` takes precedence at a shared cache, as in RFC 9111. Its own companion was not sent. |
@@ -506,11 +509,11 @@ Deployment mistakes, [measured in test 7](measurements.md#test-7-misconfigured-p
 
 | Mistake | Outcome | What limits it |
 |---|---|---|
-| An older cache inside a path configured as supporting | Responses up to the base lifetime older than intended. Measured: 2152 ms where 200 ms was asked, with `max-age=1`. | In our run, the time the base let the older cache hold the response. With `max-age=0` we measured no excess. Not a general limit: a faulty source can understate age by more. |
+| An older cache inside a path configured as supporting | Fine accounting can understate residence. Measured: 2152 ms where 200 ms was asked, with `max-age=1`. | In our run, the time the base let the older cache hold the response. With `max-age=0` we measured no excess. Not a general limit: a faulty source can understate age by more. |
 | A gateway rewrites `max-age` to 0 and leaves `max-age-ms=3600000` | Supporting caches read one hour. | Not contained by caches. The draft asks a rewriter to examine the companion too. Not measured. |
 | An intermediary strips Age-Ms from `max-age=60, max-age-ms=200` | 60 s downstream. | Falling back restores the base, which is not always shorter. The sender must accept its base. |
 | No cache configured as hearing the origin | No fine age anywhere. Every cache uses the base. | The prototype reads a missing age pair as zero only at the cache configured as hearing the origin. The cost is load, not age. |
-| Every cache configured as hearing the origin | Upstream age ignored. Up to one lifetime per cache in the worst case; none in our run. | Each cache still counts its own request delay. |
+| Every cache configured as hearing the origin | Incorrect sender classification. Origin mode can establish zero only when both age fields are absent; a received pair instead causes fallback in this mode. | The run does not establish safety for this configuration. Misclassified cache responses without age fields can be treated as origin exchanges. |
 | `max-age=0, max-age-ms=1` | Almost nothing is reused. A quarter of requests reached the origin. | The same exposure as `max-age=0` today. |
 | Lifetime shorter than the round trip to the origin | Stale on arrival. Nothing reused at the far cache. | Age is counted. See [test 3](measurements.md#test-3-a-lifetime-shorter-than-the-path). |
 | Wall clock stepped back at a cache | The prototype detects a step over 10 ms and fetches again. | A smaller step extends reuse by its size. Unit tested; no real clock was stepped. |
@@ -655,14 +658,14 @@ A prototype for nginx implements the companions for ordinary Cache-Control. It i
 
 ### What nginx needed
 
-The change is about 730 added lines of C in six files. The tests are three new files in the nginx test suite, and are skipped on a binary without the change. Most of it is one new file. Everything is off unless configured.
+At nginx `9198f9a28f58b8afc8c06817f51175b4fbeea786`, the production-code/build-list diff against `2e8440bcdc438f0f1cd03da778a3843ddb3c86d9` adds 734 lines and removes 19 across seven files. This is a measured prototype diff, not an estimate for another implementation. The tests are three new files in the nginx test suite, and are skipped on a binary without the change. Most of it is one new file. Everything is off unless configured.
 
 | Area | Change | Lines added |
 |---|---|---|
-| [`ngx_http_cache_fine.c`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/ngx_http_cache_fine.c) (new) | Parse paired directives, establish fine age, emit `Age` and `Age-Ms`, merge a 304, evaluate request directives | 481 |
-| [`ngx_http_file_cache.c`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/ngx_http_file_cache.c) | Millisecond expiry on read. Cache file version 6 keeps birth, deadline and both stale windows in milliseconds | 69 |
+| [`ngx_http_cache_fine.c`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/ngx_http_cache_fine.c) (new) | Parse paired directives, establish fine age, emit `Age` and `Age-Ms`, merge a 304, evaluate request directives | 489 |
+| [`ngx_http_file_cache.c`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/ngx_http_file_cache.c) | Millisecond expiry on read. Cache file version 6 keeps birth, deadline and both stale windows in milliseconds | 79 |
 | [`ngx_http_upstream.c`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/ngx_http_upstream.c) | Call the new handler, keep the 304 headers, two ttl variables | 70 |
-| [`ngx_http_cache.h`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/ngx_http_cache.h) | Four `int64_t` fields and two inline comparisons | 38 |
+| [`ngx_http_cache.h`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/ngx_http_cache.h) | Fine-entry fields and elapsed-time comparisons | 61 |
 | [`ngx_http_proxy_module.c`](https://github.com/randomizedcoder/nginx/blob/http-cache-millisecond-freshness/src/http/modules/ngx_http_proxy_module.c) | Two directives | 30 |
 | `ngx_http_upstream.h`, `auto/sources` | Four fields, one build line | 5 |
 
@@ -696,19 +699,38 @@ return (max_age < 0 || age <= max_age)
        && (min_fresh < 0 || remaining >= min_fresh);
 ```
 
-| Companion | In the prototype |
-|---|---|
-| `max-age-ms`, `s-maxage-ms`, `stale-while-revalidate-ms`, `stale-if-error-ms` (response) | Yes |
-| `Age-Ms` | Yes, generated and consumed |
-| `max-age-ms`, `min-fresh-ms` (request) | Yes, opt-in |
-| Cache-Status `ttl-ms` | Variables for the operator to compose |
-| `max-stale-ms`, `stale-if-error-ms` (request) | No |
-| Targeted fields such as CDN-Cache-Control | No |
-| `Retry-After-Ms`, Prefer `wait-ms` | Forwarded. nginx does not generate or act on either |
+### Prototype conformance
+
+This is the canonical detailed status table for the nginx experiment, checked
+against source revision `9198f9a28f58b8afc8c06817f51175b4fbeea786` on
+25 November 2026. The working tree also has a benchmark-harness modification;
+it does not change production cache behavior. A feature being implemented
+or a case passing is not a claim of complete conformance.
+
+| Draft behavior | Prototype behavior | Evidence and remaining limit |
+|---|---|---|
+| Paired response freshness and stale durations, preserving restrictions | Four response companions in ordinary Cache-Control, opt-in, for eligible 200 responses | Header cases and layered runs reported. Not every status or policy combination is covered. |
+| Configured origin/cache roles; consistent age pair | `origin` starts at zero only without either age field; `trusted` requires the pair; generation uses one age estimate | Mixed-path and forwarding cases reported. A consistent pair cannot establish path trust. At an `off` boundary configure `proxy_hide_header Age-Ms` too. |
+| Account for all elapsed time or cease relying on fine age | Wall-clock deadlines with a wall-minus-monotonic guard; refetch after restart or offset movement greater than 10 ms | Partial: smaller clock errors and coordinated snapshot rollback remain. Arithmetic vectors and restart integration are reported; no real clock-step experiment is reported. |
+| Valid Structured Fields Integer Item parameters on Age-Ms | Parameterised Age-Ms is rejected | Known conformance gap, yielding base fallback instead of fine selection. |
+| Fine stale windows with any eligible freshness source, including Expires | Fine policy needs an explicit max-age or s-maxage lifetime | Known gap for Expires-only freshness. |
+| Response companions in selected targeted fields | No targeted-field implementation | Not implemented; ordinary Cache-Control evidence does not cover RFC 9213 policy selection. |
+| Four request companions where fine age is available | max-age-ms and min-fresh-ms, behind `proxy_cache_fine_request`; max-stale-ms and stale-if-error-ms absent | Partial support. Stock nginx ignores request Cache-Control; opt-in behavior is tested separately. |
+| Cache-Status ttl-ms with its base | Variables let the operator compose the pair | Deployment must format and expose the diagnostic appropriately; it is not used as age input. |
+| Recompute policy and age on 304 validation | Merge metadata, serve validated body, retire fine disk entry and refill on the next request | Validation cases reported. Extra refill is a prototype cost, not an RFC requirement. |
+| Retry-After-Ms and Prefer wait-ms | Forwarded untouched by nginx | No nginx consumption or native curl implementation. The separate application adapter is not cache-interoperability evidence. |
+
+Reported checks from the prior host session: 51 native header cases, boundary
+and request-directive tables, 110 feature integration tests and 370 tests in
+the broader proxy-cache suite, with the long cache-manager case skipped.
+The matching nginx-tests revision is
+`6b2428453fe42934193e7c8b04391ed30f27d768`. No code tests were rerun for this
+document pass. Application measurements and their provenance are recorded
+separately in [measurements.md](measurements.md#revisions-and-retained-results).
 
 ### Measured through five caches
 
-A simulation runs the prototype as five caches between an origin and a client, and measures how old each response is when it leaves the last cache. [Practical tests: setup, four tests and their limits](measurements.md)
+A simulation runs the prototype as five caches between an origin and a client, and measures how old each response is when it leaves the last cache. [Practical tests: methods, results and limitations](measurements.md)
 
 | Path delay | Cache-Control | Mean staleness, ms | Max, ms | Origin requests per second |
 |---|---|---:|---:|---:|
@@ -717,10 +739,10 @@ A simulation runs the prototype as five caches between an origin and a client, a
 | 234 ms round trip | `max-age=1` | 1011 | 1881 | 2 |
 | 234 ms round trip | `max-age=0, max-age-ms=500` | 208 | 470 | 6 |
 
-- **Updates arrive five to twenty times sooner.** Each cache deducts the age it received, so five caches did not multiply the lifetime. This is not a strict bound on delivery age.
+- **These configurations produced lower response age in nginx.** They change both the policy duration and age accounting; the whole-second baseline does not apply upstream Age. They do not establish a general five-to-twentyfold protocol gain or a strict delivery-age bound.
 - **The cost is origin requests.**
 - **A lifetime shorter than the round trip to the origin leaves the last cache nothing to reuse.**
-- These runs measure caches on one host, not players.
+- These runs measure caches on one host, not players. [Test 8](measurements.md#test-8-simulated-hls-players) adds simulated HLS players.
 
 ### What took the effort
 

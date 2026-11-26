@@ -58,15 +58,13 @@ nginx stores whole-second deadlines, and it neither reads nor sends Age.
 | Tests 5–7 | Later working-tree experiments on the same branch. Their exact per-run source and binary identities were not captured; do not attribute them to a clean commit. |
 | Test 8 | nginx branch based on `9198f9a28f58b8afc8c06817f51175b4fbeea786`, with a local `workload.py` change that records failed reloads and resumes completed scenarios. The matching nginx-tests revision is `6b2428453fe42934193e7c8b04391ed30f27d768`. This is not a clean-source benchmark. |
 
-The retained Test 8 results are outside this public repository, in the
-workspace sibling directory `../hls-bench-2026-11-25/`. Its
-`comparison.csv` contains the scenario medians; each scenario directory
-contains `summary.json`, `events.csv`, tier configurations and access logs,
-and `wrk.txt` where load was enabled. The invocation and continuation logs
-are `../hls-bench-2026-11-25.log` and
-`../hls-bench-2026-11-25.resume.log`. These are local artifact locations,
-not published download links. Reproducing the reported numbers from the
-public repository alone is therefore not yet possible.
+The Test 8 summaries are published in
+[results/hls-2026-11-25/](results/hls-2026-11-25/): `comparison.csv`
+contains the scenario medians, and each scenario directory contains that
+run's `summary.json`. The per-event records, tier configurations, access
+logs, `wrk` output and invocation logs are retained locally and are not
+published. The reported numbers can therefore be checked against the
+summaries, but not recomputed from raw events.
 
 The first invocation stopped at a reload timeout. The continuation reused
 completed summaries and ran remaining scenarios after the harness change.

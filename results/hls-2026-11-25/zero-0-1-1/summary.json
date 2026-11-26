@@ -1,0 +1,33 @@
+{
+  "policy": "zero",
+  "paced": true,
+  "load": true,
+  "rep": 0,
+  "mixed": false,
+  "discoveries": 1177,
+  "discovery_p50_ms": 1484.9150339141488,
+  "discovery_p95_ms": 4278.111638966948,
+  "completion_p95_ms": 5721.883370075375,
+  "buffer_p05_s": 0.7461822859477252,
+  "stalled_player_seconds": 21.899516343604773,
+  "undiscovered_player_segments": 26,
+  "late_downloads": 19,
+  "missed": 13,
+  "failed_playlist_requests": 8,
+  "origin_playlist_gets_per_segment": 699.45,
+  "wrk_requests_per_second": 635.4,
+  "wrk_errors": [
+    "Socket errors: connect 0, read 0, write 0, timeout 177"
+  ],
+  "sample": {
+    "player": 8,
+    "segment": 43,
+    "published": 1064700.490535506,
+    "discovered": 1064703.27975517,
+    "fetch_start": 1064704.029872125,
+    "complete": 1064704.779974514,
+    "edge": "MISS",
+    "age_ms": "",
+    "poll_id": "8-10"
+  }
+}

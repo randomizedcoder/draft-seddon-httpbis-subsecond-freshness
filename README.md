@@ -45,7 +45,7 @@ Age-Ms: 175
 - MoQ relays already cache in integer milliseconds.
 - HLS and DASH over HTTP caches remain the deployed base for large live events.
 - Millisecond freshness would let those services use their existing caches closer to the same timescales. We think this would keep HTTP a practical choice for latency-sensitive delivery.
-- With simulated players, a 200 ms playlist lifetime found new segments as soon as `max-age=0`, for a fifth of the origin requests. Real players are still to be measured. [Test 8](measurements.md#test-8-simulated-hls-players)
+- With simulated players, a 200 ms playlist lifetime found new segments as soon as `max-age=0`, for a fifth of the origin requests. Real players are still to be measured. [Test 8](measurements.md#test-8-simulated-hls-players) · [Per-run results](results/hls-2026-11-25/)
 
 ## Building the draft
 

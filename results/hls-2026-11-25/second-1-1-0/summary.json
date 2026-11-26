@@ -1,0 +1,29 @@
+{
+  "policy": "second",
+  "paced": true,
+  "load": false,
+  "rep": 1,
+  "mixed": false,
+  "discoveries": 1198,
+  "discovery_p50_ms": 1176.4330239966512,
+  "discovery_p95_ms": 2114.547861041501,
+  "completion_p95_ms": 2864.6552888676524,
+  "buffer_p05_s": 1.6557506271637976,
+  "stalled_player_seconds": 0.0,
+  "undiscovered_player_segments": 9,
+  "late_downloads": 0,
+  "missed": 0,
+  "failed_playlist_requests": 0,
+  "origin_playlist_gets_per_segment": 0.5,
+  "sample": {
+    "player": 8,
+    "segment": 45,
+    "published": 1065636.345476016,
+    "discovered": 1065637.324789484,
+    "fetch_start": 1065638.074913752,
+    "complete": 1065638.825039934,
+    "edge": "HIT",
+    "age_ms": "",
+    "poll_id": "8-40"
+  }
+}

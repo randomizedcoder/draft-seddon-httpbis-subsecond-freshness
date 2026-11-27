@@ -624,6 +624,26 @@ The whole-second unit entered HTTP caching in 1997 and has been carried forward 
 - **Who asked.** Each request came from someone operating or building a reverse proxy cache.
 - **Where each stopped.** The wire format has no place for a fraction, and decimals are unsafe to send to deployed caches.
 
+### Finer resolution in other systems
+
+Other systems that expire or validate cached state began with coarse time and later needed finer time. [Finer time resolution in other systems](precedents.md) describes each, with sources.
+
+| System | Before | After | How it was added |
+|---|---|---|---|
+| Redis key expiry | Seconds | Milliseconds | New commands beside the old |
+| Linux neighbour cache | Seconds and clock ticks | Milliseconds | New `_ms` settings; old ones marked obsolete |
+| Kafka log retention | Hours | Minutes and milliseconds | New settings with a stated precedence |
+| HLS segment durations | Whole seconds | Decimal seconds | Gated on a declared version |
+| File timestamps | Seconds, then clock ticks | Nanoseconds | Extra fields; later a change counter |
+| POSIX interfaces | Seconds, then microseconds | Nanoseconds | New functions beside the old |
+| syslog timestamps | Seconds | Up to microseconds | A new message format |
+| HTTP validators | Last-Modified, one second | ETag, no time unit | A new field beside the old |
+| Web timers | Milliseconds | Sub-millisecond | A new interface; later coarsened for security |
+| DNS, memcached, CoAP | Seconds | Unchanged | |
+
+- **A new name beside the old one.** Most of these kept the existing value's unit and added a second value. This proposal does the same.
+- **Finer time narrows the window; it does not close it.** File systems still needed a change counter, and HTTP still needs ETag.
+
 ### Hardware then and now
 
 | Storage example | Read | Write | What the figures measure |

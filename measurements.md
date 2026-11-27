@@ -57,7 +57,9 @@ All figures here were taken with the earlier prototype revisions in the
 table below. Those revisions read nginx's stored clock value and sent
 Age-Ms to every client.
 nginx revision `1c012f600` reads the clock for each fine decision and leaves
-Age-Ms off by default. The tests have not been rerun with them.
+Age-Ms off by default. Revision `694bc608c` shortens the wait on
+`proxy_cache_lock` for fine locations and updates an entry in place after a
+304. The tests have not been rerun with either.
 
 | Evidence | Revision and provenance |
 |---|---|
@@ -153,7 +155,7 @@ nix run ./contrib/subsecond-cache#layers -- --connections 1
 
 - **One client connection means one fetch per expiry.** The origin sees 9.1 requests a second at 100 ms and 0.5 at `max-age=1`.
 - **Staleness is unchanged from test 1.** The extra origin requests in test 1 bought nothing.
-- **The extra load in test 1 is concurrent misses.** With four connections, several requests find the entry expired at once and each fetches. nginx's `proxy_cache_lock` would normally collapse them, but a request waiting on that lock checks again only every 500 ms, which is longer than the lifetime. The tests leave it off.
+- **The extra load in test 1 is concurrent misses.** With four connections, several requests find the entry expired at once and each fetches. nginx's `proxy_cache_lock` would normally collapse them, but at these revisions a request waiting on that lock checked again only every 500 ms, which is longer than the lifetime. The tests leave it off. From revision `694bc608c` a fine location checks after 5 ms, doubling to 500 ms; these tests have not been repeated with the lock on.
 - **For implementers.** Collapsing concurrent misses needs a wake-up finer than the lifetimes in use.
 
 ## Test 3. A lifetime shorter than the path

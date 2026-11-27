@@ -979,7 +979,9 @@ cache then underestimates the age by up to the time the legacy cache held
 the response. For a legacy cache that follows the base directives, they
 and any stale permissions determine that time, which is a reason to
 choose a base lifetime of zero when the path is not fully known
-({{base-policy}}).
+({{base-policy}}). The hidden time grows with the base: a legacy
+cache that follows `max-age=60` can hide up to 60 seconds, however short
+the fine lifetime.
 
 ## Lessons from Earlier Changes of Resolution {#lessons}
 
@@ -1025,7 +1027,7 @@ Three points apply to testing.
 - Check that each test fails without its fix. The prototype's fixes were
   written before most of their tests, so its test harness puts each
   mistake back, one at a time, and requires a test to fail. All nine are
-  caught. The two build-time checks are exercised through a helper and an
+  caught, as are the four later corrections below. The two build-time checks are exercised through a helper and an
   edited build, not on a platform that lacks the feature.
 
 - A test on an idle machine does not show the first two mistakes, because
@@ -1035,6 +1037,21 @@ Three points apply to testing.
 - Assert the values of Age and Age-Ms, and the absence of Age-Ms where it
   is not enabled. The prototype's integration tests first checked only
   the cache status of each response.
+
+A later review found further problems. Each is an interaction between
+parts that are correct alone, which tests of single fixes do not show.
+
+| Problem in the prototype | Effect | How to avoid it | Prototype now |
+|--------------------------|--------|-----------------|---------------|
+| After a restart or a clock step, every fine entry is refused at once | All such entries are fetched again together ({{sec-clocks}}) | Record enough to keep the age across a restart, or spread the refetches | Not corrected. Collapsing limits it to one fetch for each response |
+| A request waiting for another's fetch of the same response looked again only every 500 milliseconds | With a lifetime of 200 milliseconds, the response was stale again before the waiting request saw it | Wake waiting requests when the fetch completes ({{sec-load}}) | Partly corrected: the first look is after 5 milliseconds and the interval doubles. A lifetime shorter than the fetch is still not collapsed |
+| An entry validated with a 304 was discarded and fetched in full by the next request | Each validation cost two upstream requests | Update the stored metadata in place ({{validation}}) | Corrected where the stored fields keep their length; otherwise the entry is still discarded |
+| Each fallback wrote a log line | A busy path with a bad companion filled the log | Limit the rate of the log, and keep a per-response indication | Corrected: one line a second for each reason |
+| Two configurations shared one store, one with fine age and one without | Each replaced the other's stored format, so shared responses were fetched repeatedly | Do not share a store across the two, or use one stored format | A warning when the configuration is checked |
+
+Applying request directives is a further point. The server ignored them
+before; the prototype's option to apply them lets any client force an
+upstream request ({{sec-load}}). The option is off by default.
 
 # Security Considerations {#security}
 
@@ -1157,6 +1174,16 @@ that also rolls back the state used for detection is an example. The same
 events affect whole-second ages today; with sub-second lifetimes a given
 error is a larger multiple of the lifetime.
 
+One such event affects every stored response whose fine age depended on
+that clock, all at once. Each then returns to its base policy together.
+Where the base is zero, the result is a burst of requests to the upstream
+for every such response. A restart of a cache that does not account for
+the time it was not running has the same effect, with no attacker. A party
+that can step a cache's clock repeatedly can repeat the burst. Request
+collapsing limits the burst ({{synchronised}}); a cache can also spread the
+refetches over time, provided that it serves no response on a fine age it
+no longer relies on.
+
 ## Load {#sec-load}
 
 Short lifetimes can be used to increase load on an origin server or on an
@@ -1166,6 +1193,16 @@ fine lifetime does not add to what a sender can cause. In the same way, a
 fine request directive does not let a client cause more validation than
 `max-age=0` does, and a cache can ignore request directives under local
 policy as it can today.
+
+A cache that ignores request directives today, and begins to apply the
+fine ones, gives its clients a means of forcing upstream requests that
+they did not have. Such a cache needs to apply them only for clients it
+trusts, or to limit their rate.
+
+Collapsing protects an upstream only if a waiting request is released
+soon enough. A cache whose waiting requests look again at an interval
+longer than the fine lifetime finds the response stale again when they do,
+and so collapses little.
 
 ## Retry and Wait Hints {#sec-retry}
 
@@ -1221,6 +1258,9 @@ Confirm that each of the following is true:
 | Diagnostics are placed | Age-Ms and ttl-ms are sent only to the recipients configured to receive them, normally downstream caches ({{generate}}, {{sec-privacy}}). |
 | Precision is honest | Each cache knows the resolution of the clock readings it uses, and rounds age up to it ({{fine-age}}). |
 | Units are checked | Each fine value is in milliseconds; 300 seconds is `300000` ({{mismatch}}). |
+| Changes are ordered | An upstream cache sends Age-Ms before a downstream cache is configured to use it, and the downstream configuration is removed first. In the other order the downstream cache applies the base, which can be a longer lifetime or, at zero, a burst of requests ({{sec-fallback}}). |
+| Clock events are sized | The load from every fine response returning to its base at once, after a clock event or a restart, is known ({{sec-clocks}}). |
+| Request directives are limited | Fine request directives are applied only for trusted clients or under a rate limit ({{sec-load}}). |
 
 Confirm that none of the following is true:
 
@@ -1432,15 +1472,17 @@ complete conformance. The measurements were taken at or before revision
 `9198f9a28f58b8afc8c06817f51175b4fbeea786`.
 
 That revision made the mistakes listed in {{pitfalls}}. Revision
-`1c012f6000664c19691afb552ff8a8abdf360f98` corrects them, and the tests have
-not been rerun with it. nginx enables Age-Ms per location, not per
+`1c012f6000664c19691afb552ff8a8abdf360f98` corrects them. Revision
+`694bc608cdd3ecf15b9e35e3f0fc7a2666d0f1a0` corrects four of the later problems in the
+second table there. The measurements have not been repeated with either. nginx enables Age-Ms per location, not per
 recipient.
 
 Known gaps include targeted fields, the remaining request companions,
 Age-Ms Item parameters and fine stale windows with Expires-only freshness.
 Wall-clock deadlines with a 10 millisecond offset-change guard do not meet
-all the elapsed-time requirements in {{fine-age}}. The prototype retires a
-fine disk entry after validation, causing a later refill; this is not a
+all the elapsed-time requirements in {{fine-age}}. After validation the prototype updates a fine
+disk entry in place only when the stored fields keep their length;
+otherwise it retires the entry, causing a later refill. This is not a
 requirement of the protocol. Retry-After-Ms and wait-ms are forwarded
 without being acted on.
 

@@ -42,6 +42,12 @@ informative:
   RFC9000:
   RFC9211:
   I-D.ietf-moq-transport:
+  PRECEDENTS:
+    title: "Finer time resolution in other systems"
+    author:
+      - name: Dave Seddon
+    target: https://github.com/randomizedcoder/draft-seddon-httpbis-subsecond-freshness/blob/main/precedents.md
+    date: 2026-11
   WG2011:
     title: "Re: #282: Recommend minimum sizes for protocol elements"
     author:
@@ -227,6 +233,7 @@ The wire range is independent of an implementation's timer resolution.
 A value that does not match the delta-milliseconds rule is invalid. This
 includes a value with:
 
+- no digits;
 - a sign;
 - a fraction;
 - a unit suffix; or
@@ -385,6 +392,10 @@ A cache that ignores a fine directive applies the remaining directives as
 specified in {{RFC9111}} and {{RFC5861}}. Ignoring a fine directive never
 causes its base directive to be ignored.
 
+The base directive is a permanent part of this extension. This document
+does not deprecate any whole-second directive or the Age header field, and
+a fine directive is never valid on its own.
+
 Ignoring a fine directive restores the base policy. It does not necessarily
 reduce the permitted duration: `max-age=60, max-age-ms=200` permits 60
 seconds wherever the fine directive is not used. A sender MUST select base
@@ -446,10 +457,16 @@ added to the Age field value.
 
 ## Generating Age-Ms {#generate}
 
-An implementing cache that generates an Age header field, as required by
-{{Section 4 of RFC9111}}, SHOULD also generate an Age-Ms header field when
-it has a fine age for the response. It MUST NOT generate Age-Ms when it has
-no fine age.
+An implementing cache does not generate Age-Ms by default. Finer timing
+than a recipient needs is information given away ({{sec-privacy}}), and
+only a downstream cache on a configured path can use it ({{receive}}).
+
+A cache that has been configured to supply fine age to the recipient of a
+response, and that has a fine age for the response, SHOULD generate an
+Age-Ms header field together with the Age header field required by
+{{Section 4 of RFC9111}}. A cache SHOULD NOT generate Age-Ms in a response
+to any other recipient. It MUST NOT generate Age-Ms when it has no fine
+age.
 
 When a cache generates both fields, it MUST derive them from the same age
 estimate, so that the Age field value is equal to the Age-Ms field value
@@ -460,17 +477,18 @@ These requirements apply to every response in which the cache generates an
 Age header field. That includes a 304 (Not Modified) response that the
 cache generates from a stored response.
 
-An implementing cache that forwards a response without serving it from
-storage, and has a fine age for it, SHOULD likewise generate both fields.
-A downstream cache obtains no fine age from a cache's response that lacks
-them ({{receive}}).
+The same applies to an implementing cache that forwards a response without
+serving it from storage and has a fine age for it. A downstream cache
+obtains no fine age from a cache's response that lacks Age-Ms
+({{receive}}); it applies the base directives.
 
-A cache MAY omit Age-Ms, for example where downstream recipients do not
-need fine age ({{security}}). A downstream cache then applies the base
-directives. A cache that reports a coarser age than it holds MUST round the
+A cache MUST NOT report an age with a finer resolution than it measured
+({{fine-age}}). A cache that reports a coarser age than it holds MUST round the
 age up, and MUST derive Age and Age-Ms from the same rounded estimate. For
 example, an age of 999 milliseconds rounded up to a 10 millisecond step is
-sent as `Age-Ms: 1000` with `Age: 1`.
+sent as `Age-Ms: 1000` with `Age: 1`. This rule concerns the estimate. The
+Age field remains a whole number of seconds obtained as {{RFC9111}}
+specifies, whether or not Age-Ms accompanies it.
 
 An origin server does not generate Age-Ms.
 
@@ -566,8 +584,10 @@ to indicate staleness.
 Cache-Status: ExampleCache; hit; ttl=0; ttl-ms=25
 ~~~
 
-A cache MAY generate ttl-ms when it has a fine age for the response
-({{fine-age}}). It MUST NOT generate ttl-ms otherwise. A cache that
+A cache does not generate ttl-ms by default. It MAY generate ttl-ms when
+it has been configured to do so and has a fine age for the response
+({{fine-age}}). It MUST NOT generate ttl-ms otherwise. The value is rounded
+down to the resolution at which the cache measured the age ({{fine-age}}). A cache that
 generates ttl-ms MUST also generate ttl in the same list member, and
 derives both from the same calculation.
 
@@ -624,6 +644,13 @@ A cache whose clock has a coarser resolution than one millisecond MUST
 round each age up, and each lifetime and stale window down, to that
 resolution. This is consistent with the treatment of Expires in
 {{Section 4.2 of RFC9111}}.
+
+The resolution that matters is that of the readings actually used. An
+implementation that reads its clock once and reuses the value for later
+requests has a resolution no finer than the interval between readings. A
+cache MUST NOT report an age in Age-Ms, or a remaining lifetime in ttl-ms,
+with a finer resolution than this. A recipient cannot assume that a
+received value is accurate to one millisecond.
 
 ## Calculating Freshness {#freshness}
 
@@ -862,7 +889,7 @@ A sender is advised to choose values that remain acceptable if a cache
 honours them only approximately, and that are no shorter than the
 application needs.
 
-## Origin Load
+## Origin Load {#origin-load}
 
 A short freshness lifetime increases the rate at which caches contact the
 origin server. Shortening a lifetime from one second to 200 milliseconds
@@ -953,6 +980,61 @@ the response. For a legacy cache that follows the base directives, they
 and any stale permissions determine that time, which is a reason to
 choose a base lifetime of zero when the path is not fully known
 ({{base-policy}}).
+
+## Lessons from Earlier Changes of Resolution {#lessons}
+
+Other systems have moved a cached or exchanged time value to a finer unit.
+Those changes had problems, and some needed several corrections
+{{PRECEDENTS}}. This table lists the problems that apply here and what this
+document does about each. Not all are solved; the Status column says which.
+
+| What went wrong elsewhere | What this document does | Status |
+|---------------------------|-------------------------|--------|
+| A finer format carried values measured by a coarse clock | An age is rounded up to the resolution of the clock readings used, and is not reported more finely ({{fine-age}}) | Addressed. The prototype had this fault ({{pitfalls}}) |
+| A coarse component in the path dropped or truncated the fine value | Fine age is used only on a completely configured path; otherwise the base applies ({{receive}}, {{sec-fallback}}) | Depends on configuration; a recipient cannot detect an error ({{sec-age}}) |
+| Fine and coarse values were mixed, and their order was lost | Both age fields come from one estimate, and an inconsistent pair is rejected ({{generate}}, {{receive}}) | Addressed |
+| Two names for one value disagreed on the unit | Each new name carries its unit, and the two values are independent ({{mismatch}}) | A sender can still write seconds where milliseconds are meant |
+| Absent and unusual values were left undefined | Each case is defined ({{delta-ms}}, {{pairing}}, {{sec-values}}) | Addressed |
+| Finer timing exposed information and had to be made coarser | Age-Ms and ttl-ms are not generated by default ({{generate}}, {{sec-privacy}}) | Response timing remains observable |
+| Finer time cost more | The cost is origin requests; it is the sender's choice and is to be measured ({{origin-load}}) | Operator's decision |
+| New names multiplied | Ten names are added. A single general mechanism was considered ({{alternatives}}) | Open |
+| The finer unit was not fine enough | Milliseconds are chosen for range ({{delta-ms}}). A further companion would repeat this work ({{alternatives}}) | Open |
+| The old form never went away | The whole-second base is permanent. This document does not deprecate it and does not expect a later document to ({{pairing}}) | Accepted |
+| Some values stayed coarse | Date, Expires, Last-Modified and heuristic freshness keep whole seconds ({{other}}) | Accepted |
+
+## Implementation Pitfalls {#pitfalls}
+
+The author's nginx prototype made each mistake below. All of them passed
+its tests, which ran on an idle machine over loopback. They are listed so
+that other implementers do not repeat them.
+
+| Mistake in the prototype | Effect | How to avoid it |
+|--------------------------|--------|-----------------|
+| Age came from a clock value that the server reads once per event-loop pass, or once per configured interval, and reuses | Age-Ms was printed to the millisecond but could be late by the whole interval. An entry could be reused after its deadline | Read the clock for each fine decision, or add the longest interval between readings to the age ({{fine-age}}) |
+| Request delay came from the same reused value | The delay could read as zero, which understated the age | Take both ends of the delay from readings that can only make it longer ({{fine-age}}) |
+| A negative age was clamped to zero | A clock that stepped back produced a response that looked new | Treat a negative age as a clock fault: stop using the fine age and report none ({{fine-age}}) |
+| The guard against clock steps compared the wall clock with a monotonic clock, and compiled to nothing where no monotonic clock existed | The guard was always satisfied on such builds | Refuse to enable fine age where elapsed time cannot be checked ({{fine-age}}) |
+| Millisecond deadlines were kept in fields sized for seconds | Fine handling silently did nothing where the field was 32 bits wide | Check the width at configuration time and fail loudly ({{delta-ms}}) |
+| Age-Ms was sent to every client once fine age was enabled | Fine timing reached recipients that had no use for it ({{sec-privacy}}) | Make generation a separate setting, off by default ({{generate}}) |
+| An Age-Ms value too large to give a deadline made the response uncacheable | A bad value from upstream removed caching altogether | Ignore the fine value and apply the base ({{sec-values}}) |
+| A stored entry without fine age was served with the Age it arrived with | The time spent in this cache was missing from Age | Generate Age as {{RFC9111}} requires on every path, including fallback ({{generate}}) |
+| Nothing recorded why a fine age was not used | An operator could not tell a working path from one that had fallen back to whole seconds | Log or expose the reason for each fallback ({{sec-checklist}}) |
+
+Three points apply to testing.
+
+- Check that each test fails without its fix. The prototype's fixes were
+  written before most of their tests, so its test harness puts each
+  mistake back, one at a time, and requires a test to fail. All nine are
+  caught. The two build-time checks are exercised through a helper and an
+  edited build, not on a platform that lacks the feature.
+
+- A test on an idle machine does not show the first two mistakes, because
+  the clock is read often. Run the tests with the coarsest clock setting
+  the implementation allows, and check that no entry is reused past its
+  deadline and that no reported age is less than the elapsed time.
+- Assert the values of Age and Age-Ms, and the absence of Age-Ms where it
+  is not enabled. The prototype's integration tests first checked only
+  the cache status of each response.
 
 # Security Considerations {#security}
 
@@ -1103,10 +1185,14 @@ requested the same resource, which adds to the timing attacks described in
 {{Section 7.2 of RFC9111}}. The ttl-ms parameter exposes the same timing.
 
 The observer has to receive the fields, or be able to obtain comparable
-responses from the same shared cache. A cache can omit Age-Ms
-({{generate}}) and withhold ttl-ms where downstream recipients do not need
-them; a cache that coarsens age rounds it up, so that privacy handling
-never understates age. Omitting Age-Ms while still sending ttl-ms leaves
+responses from the same shared cache. For this reason a cache generates
+neither field unless it has been configured to ({{generate}}, {{ttl-ms}}),
+and the expected configuration is to send them to downstream caches on a
+configured path and not to user agents. High-resolution timers in web
+browsers were made coarser after they were found to help side-channel
+attacks {{PRECEDENTS}}; this document starts from the coarser default.
+A cache that coarsens age rounds it up, so that privacy handling
+never understates age. Sending ttl-ms without Age-Ms leaves
 the finer timing visible.
 
 What remains: neither the finer fields nor their omission guarantees
@@ -1132,7 +1218,8 @@ Confirm that each of the following is true:
 | The lifetime is assessed | The fine lifetime has been compared with validation latency and origin capacity ({{choosing}}). |
 | Bursts are assessed | The effect of synchronised expiry is known, and request collapsing or a stale window is used where needed ({{synchronised}}). |
 | Fallback is recorded | Rejected age pairs and fallback to the base policy are counted. These counts do not authenticate age ({{sec-age}}). |
-| Diagnostics are placed | Age-Ms and ttl-ms are sent where they are useful and omitted elsewhere ({{sec-privacy}}). |
+| Diagnostics are placed | Age-Ms and ttl-ms are sent only to the recipients configured to receive them, normally downstream caches ({{generate}}, {{sec-privacy}}). |
+| Precision is honest | Each cache knows the resolution of the clock readings it uses, and rounds age up to it ({{fine-age}}). |
 | Units are checked | Each fine value is in milliseconds; 300 seconds is `300000` ({{mismatch}}). |
 
 Confirm that none of the following is true:
@@ -1145,6 +1232,7 @@ Confirm that none of the following is true:
 | A companion was added to an old base | No field has a fine value beside a longer base that was not reviewed, such as `max-age=60, max-age-ms=200` ({{mismatch}}). |
 | A fine directive stands alone | No field carries a fine directive without its base ({{pairing}}). |
 | A duration stands in for a restriction | No response relies on a fine directive, or on `max-age=0`, where no-store, no-cache or private is needed ({{sec-fallback}}). |
+| Fine timing is sent by default | No cache sends Age-Ms or ttl-ms to user agents, or to every recipient, without a decision to do so ({{sec-privacy}}). |
 | An origin sends Age-Ms | No origin server generates Age-Ms, and no cache forwards an Age-Ms value it did not use ({{generate}}, {{receive}}). |
 | Age is rounded down or jittered | No cache lowers or randomises Age-Ms; coarsening rounds up, with both age fields from one estimate ({{generate}}). |
 | Freshness is treated as a deadline | No application treats a fine lifetime as a limit on delivery age or as evidence that data is current ({{timeliness}}). |
@@ -1291,7 +1379,18 @@ Explicit units:
   one millisecond has been identified. If one is, a further companion in
   that unit could follow the pattern of this document, with the base and
   the millisecond companion as its fallbacks. Its range would be shorter
-  than that of its base ({{delta-ms}}).
+  than that of its base ({{delta-ms}}). This is a real risk: programming
+  interfaces for file times moved from seconds to microseconds and then to
+  nanoseconds, with new names each time {{PRECEDENTS}}.
+
+One general mechanism:
+: This document adds ten names. Each needs registration, parsing and
+  tests, and other systems that added names per unit later consolidated
+  them {{PRECEDENTS}}. A single rule, such as a unit suffix accepted by
+  every duration, would add one. It was not chosen because a recipient
+  that does not know the rule sees an invalid value in the existing
+  directive, and the sender loses control of the fallback. Whether the
+  number of names is acceptable is a question for the working group.
 
 A parameter in targeted fields:
 : `CDN-Cache-Control: max-age=0;ms=200` attaches the fine value to its base,
@@ -1308,7 +1407,9 @@ A fraction within Age:
 # Time-Related Fields Left Unchanged {#other}
 
 The following fields and parameters carry time in whole seconds and are not
-changed by this document.
+changed by this document. A response whose freshness comes from Expires or
+from a heuristic therefore keeps a whole-second lifetime
+({{Section 4.2 of RFC9111}}).
 
 | Field or parameter | Reason |
 |--------------------|--------|
@@ -1323,12 +1424,17 @@ changed by this document.
 
 This section is to be removed before publication.
 
-An opt-in nginx prototype at commit
-`9198f9a28f58b8afc8c06817f51175b4fbeea786` implements the four response
+An opt-in nginx prototype implements the four response
 companions in ordinary Cache-Control for eligible 200 responses, Age-Ms,
 the max-age-ms and min-fresh-ms request directives, and variables for
 composing ttl and ttl-ms diagnostics. It is an experiment, not a claim of
-complete conformance.
+complete conformance. The measurements were taken at or before revision
+`9198f9a28f58b8afc8c06817f51175b4fbeea786`.
+
+That revision made the mistakes listed in {{pitfalls}}. Revision
+`1c012f6000664c19691afb552ff8a8abdf360f98` corrects them, and the tests have
+not been rerun with it. nginx enables Age-Ms per location, not per
+recipient.
 
 Known gaps include targeted fields, the remaining request companions,
 Age-Ms Item parameters and fine stale windows with Expires-only freshness.

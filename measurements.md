@@ -48,9 +48,16 @@ bounds reuse decisions, not the time at which a response reaches a client.
 Tests 1 to 4 change both the policy duration and the precision of age
 accounting. Test 5 holds the duration at one second and changes only the
 accounting. The whole-second path reflects nginx's implementation: stock
-nginx stores whole-second deadlines, and it neither reads nor sends Age.
+nginx stores whole-second deadlines. It forwards an Age field received from
+upstream, but neither interprets nor generates one.
 
 ## Revisions and retained results
+
+All figures here were taken with the earlier prototype revisions in the
+table below. Those revisions read nginx's stored clock value and sent
+Age-Ms to every client.
+nginx revision `1c012f600` reads the clock for each fine decision and leaves
+Age-Ms off by default. The tests have not been rerun with them.
 
 | Evidence | Revision and provenance |
 |---|---|
@@ -210,7 +217,7 @@ The delayed rows add `--wan`.
 - **The difference is nginx's whole-second deadline.** Stock nginx stores "expires at second N+1" and treats the entry as fresh until that second has passed, so a `max-age=1` entry lives between one and two seconds. The prototype stores the deadline in milliseconds.
 - **So test 1's twentyfold gain is two effects.** About twofold comes from exact deadlines and about tenfold from the shorter lifetime.
 - **Over the delayed path the paired entry is never older than its lifetime.** The oldest was 967 ms. Each cache counted the 234 ms already spent.
-- **This is not a test of Age truncation between conforming caches.** Stock nginx neither reads nor sends Age, so the whole-second path here has no upstream age to truncate. A baseline that applies Age as RFC 9111 specifies would sit between these two rows. We have not run one.
+- **This is not a test of Age truncation between conforming caches.** Stock nginx forwards a received Age but neither interprets nor generates one, so the whole-second path here has no upstream age to truncate. A baseline that applies Age as RFC 9111 specifies would sit between these two rows. We have not run one.
 - **Origin requests rose slightly**, 2.4 against 2.0 a second, because the entry expires on time.
 
 ## Test 6. Mismatched and malformed pairs

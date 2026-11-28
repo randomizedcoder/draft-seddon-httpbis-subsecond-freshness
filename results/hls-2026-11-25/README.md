@@ -5,7 +5,7 @@ Per-run summaries behind [Test 8](../../measurements.md#test-8-simulated-hls-pla
 | File | Contents |
 |---|---|
 | `comparison.csv` | One row per policy, pacing and load combination: the median across repetitions of each metric |
-| `<policy>-<paced>-<load>-<rep>/summary.json` | One run: discovery and completion percentiles, buffer, stalls, failed reloads, origin playlist requests per segment, and one sample event |
+| `<policy>-<rep>-<paced>-<load>/summary.json` | One run: discovery and completion percentiles, buffer, stalls, failed reloads, origin playlist requests per segment, and one sample event |
 | `mixed-fine/`, `mixed-second/` | One run each with an unmodified nginx shield |
 
 - **Policies.** `zero` is `max-age=0`; `second` is `max-age=1`; `fine` is `max-age=0, max-age-ms=200`; `background` adds a 200 ms stale-while-revalidate window.

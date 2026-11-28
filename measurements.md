@@ -15,7 +15,10 @@ These tests run the [nginx prototype](https://github.com/randomizedcoder/nginx/t
 - **Mismatched and malformed pairs behave as the draft says.** A companion above or below its base is used as written on a supporting path. A malformed companion yields to its base.
 - **A wrong trust setting can defeat fine-age accounting.** With an older cache replaying Age-Ms inside a path configured as supporting, `max-age=1, max-age-ms=200` gave responses up to 2152 ms old, against 204 ms when configured correctly. With a base of `max-age=0` the effect did not appear in this run. Neither observation establishes a general bound on concealed age.
 - **For simulated players, 200 ms found segments as soon as `max-age=0`, for a fifth of the origin requests.** Twenty players found a new segment within 968 ms at the 95th percentile under either policy, and within 2241 ms under `max-age=1`. The origin served 4 playlist requests per segment at 200 ms, against 20 at `max-age=0`.
-- **Under heavy load, `max-age=0` failed in nginx and 200 ms did not.** With a load generator on the playlist, `max-age=0` took 3064 ms to discovery and players stalled. The 200 ms policy was unchanged at 936 ms.
+- **Under heavy load, `max-age=0` failed in nginx and 200 ms did not, in the first run.** With a load generator on the playlist, `max-age=0` took 3064 ms to discovery and players stalled. The 200 ms policy was unchanged at 936 ms.
+- **In the rerun with a later prototype revision, `max-age=0` under load no longer failed.** Discovery was 876 ms with no stalls. The origin then served about 3400 playlist requests per segment, against 42 at 200 ms and 5 with a stale window.
+- **Rerun on 27 November.** Tests 1, 3, 4 and 8 were repeated with the later revision. The staleness figures agree with the first runs to within a few milliseconds on average; the maxima and the origin rates differ. The results are given beside the first ones in each test. [Rerun](#rerun-of-27-november-2026)
+- **The cache lock does not collapse refreshes in nginx.** With `proxy_cache_lock on`, origin requests on the fine path were unchanged: 24.7 a second against 22.9. The lock covers an entry that does not exist yet, not one that has expired. A stale window is what collapses refreshes.
 - **Not shown.** Real players and devices, behaviour under real network conditions, and a baseline cache that applies upstream Age as RFC 9111 specifies.
 
 | Test | Path delay | Cache-Control | Responses | Mean | p99 | Max | Origin req/s |
@@ -59,12 +62,16 @@ Age-Ms to every client.
 nginx revision `1c012f600` reads the clock for each fine decision and leaves
 Age-Ms off by default. Revision `694bc608c` shortens the wait on
 `proxy_cache_lock` for fine locations and updates an entry in place after a
-304. The tests have not been rerun with either.
+304. Revision `092c1979b` wakes waiting requests when a fetch ends and
+keeps a fine entry across a restart. Tests 1, 3, 4 and 8 were rerun with
+that source on 27 November 2026; see [the rerun](#rerun-of-27-november-2026).
+Tests 2, 5, 6 and 7 have not been rerun.
 
 | Evidence | Revision and provenance |
 |---|---|
 | Tests 1–4 | The recorded prototype revision is `f7cd0dff6`; the full commit is available in the nginx history. The original notes do not identify every working-tree modification or binary build identifier. |
 | Tests 5–7 | Later working-tree experiments on the same branch. Their exact per-run source and binary identities were not captured; do not attribute them to a clean commit. |
+| Rerun of Tests 1, 3, 4 and 8 | nginx commit `277ed19670afe4084a3ddaabdf4858c19b1bd767` plus the later fixes, built from the working tree before they were committed. The source changes were then committed as `092c1979bbfc425a80cc7c0be60e33aa1b629722`. SHA-256 of that diff: `c630d415a229fc27116b02053e11e7aa60a2c073976cb275f33fce55a4bdda96`. Not a clean-commit benchmark. |
 | Test 8 | nginx branch based on `9198f9a28f58b8afc8c06817f51175b4fbeea786`, with a local `workload.py` change that records failed reloads and resumes completed scenarios. The matching nginx-tests revision is `6b2428453fe42934193e7c8b04391ed30f27d768`. This is not a clean-source benchmark. |
 
 The Test 8 summaries are published in
@@ -79,7 +86,13 @@ The first invocation stopped at a reload timeout. The continuation reused
 completed summaries and ran remaining scenarios after the harness change.
 There are 50 final scenario summaries, including two mixed-version smoke
 runs; they do not represent 50 independent repetitions of one comparison.
-No new measurements were run for this document revision.
+
+### Rerun of 27 November 2026
+
+- **What.** Tests 1, 3 and 4, each also with `proxy_cache_lock on`, and all of Test 8.
+- **Summaries.** [results/layers-2026-11-27/](results/layers-2026-11-27/) and [results/hls-2026-11-27/](results/hls-2026-11-27/). Each README records the source, lock file hash and host.
+- **Host.** The same machine, not idle: load average 19 to 47 during the layer runs and 6 to 48 during Test 8, on 24 threads.
+- **First figures kept.** The tables and text of each test are the first runs. The rerun is given under each as a separate table.
 
 For a subsequent run, retain exact source commits plus any dirty diff,
 binary/store identifiers, dependency lock, command, host conditions and raw
@@ -134,6 +147,17 @@ nix run ./contrib/subsecond-cache#layers
 | `max-age=1` | 225988 | 999.2 | 996.0 | 1792.0 | 1974.0 | 1999.0 | 1.8 |
 | `max-age=0, max-age-ms=100` | 219498 | 48.2 | 48.0 | 85.0 | 94.0 | 111.0 | 35.9 |
 
+Rerun, 27 November:
+
+| Cache-Control | Lock | Responses | Mean | p50 | p90 | p99 | Max | Origin req/s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `max-age=1` | Off | 204561 | 1025.5 | 1057.0 | 1822.0 | 1978.0 | 2000.0 | 2.0 |
+| `max-age=0, max-age-ms=100` | Off | 197003 | 48.8 | 49.0 | 86.0 | 96.0 | 181.0 | 22.9 |
+| `max-age=1` | On | 102155 | 988.7 | 999.0 | 1765.0 | 1979.0 | 1998.0 | 2.0 |
+| `max-age=0, max-age-ms=100` | On | 87235 | 47.4 | 47.0 | 82.0 | 95.0 | 237.0 | 24.7 |
+
+- **Rerun: same mean, larger maximum.** 48.8 ms on average and 96 ms at the 99th percentile, as before. The oldest response was 181 ms, and 237 ms with the lock, against 111 ms. The host was more heavily loaded; the cause was not isolated.
+- **Rerun: the lock did not reduce origin requests.** See [Test 2](#test-2-one-connection).
 - **Fine age stays near the selected budget.** Measured response age on the fine path runs from 0 to about 100 ms, with a maximum of 111 ms. Five caches did not make it five times longer in this run.
 - **Why it holds.** Each cache sends `Age-Ms` with the response. The next cache subtracts that age, and its own request delay, from the 100 ms before reusing the response.
 - **The whole-second path runs from 0 to 2 seconds.** nginx stores whole-second deadlines, so a `max-age=1` entry lives between one and two seconds.
@@ -155,8 +179,10 @@ nix run ./contrib/subsecond-cache#layers -- --connections 1
 
 - **One client connection means one fetch per expiry.** The origin sees 9.1 requests a second at 100 ms and 0.5 at `max-age=1`.
 - **Staleness is unchanged from test 1.** The extra origin requests in test 1 bought nothing.
-- **The extra load in test 1 is concurrent misses.** With four connections, several requests find the entry expired at once and each fetches. nginx's `proxy_cache_lock` would normally collapse them, but at these revisions a request waiting on that lock checked again only every 500 ms, which is longer than the lifetime. The tests leave it off. From revision `694bc608c` a fine location checks after 5 ms, doubling to 500 ms; these tests have not been repeated with the lock on.
-- **For implementers.** Collapsing concurrent misses needs a wake-up finer than the lifetimes in use.
+- **The extra load in test 1 is concurrent misses.** With four connections, several requests find the entry expired at once and each fetches. The tests leave nginx's `proxy_cache_lock` off.
+- **The lock does not collapse them.** An earlier version of this document said it normally would. The rerun of Test 1 with the lock on gave 24.7 origin requests a second on the fine path, against 22.9 without. In nginx the lock makes later requests wait only when the entry does not exist. For an entry that exists and has expired, one request is marked as updating and the others go upstream, unless a stale window lets them be served the stored response.
+- **A stale window does collapse them.** In [Test 8](#test-8-simulated-hls-players), `stale-while-revalidate-ms=200` cut origin requests under load from 42 per segment to 5.
+- **For implementers.** Collapsing refreshes of an expired entry needs either a stale window or a wait that covers existing entries, with a wake-up finer than the lifetimes in use.
 
 ## Test 3. A lifetime shorter than the path
 
@@ -171,6 +197,16 @@ nix run ./contrib/subsecond-cache#layers -- --wan
 | `max-age=1` | 451257 | 1001.3 | 1008.0 | 1703.0 | 1861.0 | 1880.0 | 2.0 |
 | `max-age=0, max-age-ms=100` | 164 | 124.8 | 123.0 | 135.0 | 144.0 | 144.0 | 12.3 |
 
+Rerun, 27 November:
+
+| Cache-Control | Lock | Responses | Mean | p50 | p90 | p99 | Max | Origin req/s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `max-age=1` | Off | 193372 | 1011.6 | 1000.0 | 1719.0 | 1856.0 | 1880.0 | 2.0 |
+| `max-age=0, max-age-ms=100` | Off | 156 | 133.8 | 129.0 | 145.0 | 228.0 | 228.0 | 10.8 |
+| `max-age=1` | On | 169061 | 1034.6 | 1051.0 | 1697.0 | 1849.0 | 1872.0 | 2.0 |
+| `max-age=0, max-age-ms=100` | On | 156 | 132.5 | 130.0 | 144.0 | 164.0 | 165.0 | 10.4 |
+
+- **Rerun: the same outcome.** 156 responses in ten seconds, each about 130 ms old.
 - **The fine path stops caching at the far end.** A response has spent more than 100 ms in transit by the time Melbourne receives it. The Melbourne cache recorded no hits on `/fine`.
 - **Every request travels the whole chain.** Four connections completed 164 requests in ten seconds, each waiting for the round trip.
 - **The responses are recent but few.** They are about 125 ms old, close to the one-way delay, and already beyond the 100 ms freshness lifetime. The last cache cannot reuse them as fresh.
@@ -190,6 +226,16 @@ nix run ./contrib/subsecond-cache#layers -- --wan --fine-ms 500
 | `max-age=1` | 386656 | 1010.7 | 1016.0 | 1716.0 | 1862.0 | 1881.0 | 2.0 |
 | `max-age=0, max-age-ms=500` | 62713 | 207.9 | 210.0 | 261.0 | 276.0 | 470.0 | 6.4 |
 
+Rerun, 27 November:
+
+| Cache-Control | Lock | Responses | Mean | p50 | p90 | p99 | Max | Origin req/s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `max-age=1` | Off | 143827 | 998.6 | 990.0 | 1686.0 | 1868.0 | 1942.0 | 2.0 |
+| `max-age=0, max-age-ms=500` | Off | 22468 | 203.7 | 202.0 | 251.0 | 273.0 | 475.0 | 5.3 |
+| `max-age=1` | On | 226764 | 1035.2 | 1069.0 | 1693.0 | 1852.0 | 1874.0 | 2.0 |
+| `max-age=0, max-age-ms=500` | On | 34234 | 210.3 | 208.0 | 263.0 | 313.0 | 577.0 | 4.9 |
+
+- **Rerun: the same mean.** 204 ms on average and 475 ms at most without the lock. With the lock on, the oldest response was 577 ms old at delivery, beyond the 500 ms lifetime. The cause was not isolated; staleness here includes time in flight and time spent waiting.
 - **Updates arrive about five times sooner** than under `max-age=1`, 208 ms against 1011 ms on average.
 - **No response exceeded the lifetime.** The oldest was 470 ms.
 - **Melbourne reuses each response for about 266 ms.** That is the 500 ms lifetime less the 234 ms round trip already spent.
@@ -311,6 +357,24 @@ Discovery is the time from a segment being published to a player first seeing it
 
 These rows are the unpaced runs. Each run covers 1200 player-seconds. The paced runs gave the same ordering.
 
+Rerun, 27 November, with the later prototype revision:
+
+| Playlist policy | Load | Discovery p50 (ms) | Discovery p95 (ms) | Range of p95 (ms) | Stalled player-seconds | Failed reloads | Origin playlist requests per segment |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `max-age=0` | No | 467 | 973 | 866–982 | 0 | 0 | 20.0 |
+| `max-age=1` | No | 1103 | 2077 | 1711–2226 | 0.1 | 0 | 0.5 |
+| `max-age=0, max-age-ms=200` | No | 555 | 980 | 876–982 | 0 | 0 | 4.0 |
+| 200 ms, plus `stale-while-revalidate-ms=200` | No | 683 | 966 | 868–983 | 0 | 0 | 3.0 |
+| `max-age=0` | Yes | 470 | 876 | 850–952 | 0 | 0 | 3363 |
+| `max-age=1` | Yes | 869 | 1571 | 1547–2375 | 0 | 0 | 7.6 |
+| `max-age=0, max-age-ms=200` | Yes | 548 | 888 | 874–937 | 0 | 0 | 42.2 |
+| 200 ms, plus `stale-while-revalidate-ms=200` | Yes | 579 | 982 | 890–986 | 0 | 0 | 5.0 |
+
+- **Rerun: seven of the eight rows are close to the first run.** The ordering of the policies and the origin requests per segment are the same. `max-age=1` without load was about 160 ms quicker and stalled less.
+- **Rerun: `max-age=0` under load did not fail.** No stalls, no failed reloads, and discovery at 876 ms. The load generator was still held to 2400 to 4000 requests a second, against 25,000 to 44,000 under the other policies, and reported no errors. The origin served about as many playlist requests as the load generator sent: about 3400 per segment, against 768 in the first run.
+- **Why it changed was not isolated.** Between the runs the prototype shortened the wait on the cache lock and began waking waiting requests when a fetch ends. That is consistent with requests no longer queueing, but no run here separates it from other differences between the two days.
+- **What holds in both runs.** `max-age=0` with a cache lock costs the origin hundreds to thousands of requests per segment under load. The 200 ms policy costs about 42, and 5 with a stale window, with the same discovery time.
+
 - **A 200 ms lifetime found segments as soon as `max-age=0`.** Both gave a 95th percentile near 970 ms. The player's own reload interval sets that figure, so a shorter lifetime would not improve it here.
 - **It did so with a fifth of the origin requests.** Four per segment against 20, one for each player reload.
 - **`max-age=1` took more than twice as long.** With no other traffic the origin was asked once every two seconds, so half the playlists were never fetched. This is nginx's whole-second deadline across two tiers, as in [Test 5](#test-5-the-same-lifetime-in-both-units). A cache that applied upstream Age would do better.
@@ -325,13 +389,14 @@ These rows are the unpaced runs. Each run covers 1200 player-seconds. The paced 
 - **The players are a script.** They follow one reload rule. A real player has its own schedule, bitrate switching and buffer policy.
 - **The load is not an audience.** Sixteen connections requesting one URL as fast as possible is a stress, not a model of viewers.
 - **One implementation, one host.** There is no network delay, loss or second cache implementation.
-- **Stalls were rare except under `max-age=0` with load.** This test does not show that a finer lifetime prevents stalls in ordinary conditions.
+- **The `max-age=0` failure under load did not repeat.** It appeared in all three repetitions of the first run and none of the rerun, with a different prototype revision. Treat it as a property of that revision and those conditions.
+- **Stalls were rare except under `max-age=0` with load in the first run.** This test does not show that a finer lifetime prevents stalls in ordinary conditions.
 
 ## What these tests do not show
 
 - **A conforming whole-second baseline.** RFC 9111 already counts upstream age and request delay, and does not grant a new lifetime at every cache. Stock nginx does not apply Age, so these runs cannot show what truncating Age to whole seconds costs between caches that do. That needs a second implementation, with the age each tier sent and received logged.
 - **Caches with independent clocks and demand.** All five processes share one clock and one implementation.
-- **Clock steps.** The prototype drops a fine entry when the wall clock steps by more than 10 ms, on suspend and on restart. The comparison has unit tests and the restart has an integration test. No run here steps a real clock.
+- **Clock steps.** The prototype drops a fine entry when the wall clock steps by more than 10 ms, on suspend and on reboot. From the later revision an entry is kept across a restart of nginx. The comparison has unit tests and the restart has an integration test. No run here steps a real clock.
 - **Real players.** Tests 1 to 7 model no player. Test 8 uses scripted players on loopback. Whether sooner playlist updates reduce stalls on real devices and networks is still to be measured.
 - **Real networks.** The delays are fixed and illustrative. There is no loss, jitter or congestion.
 - **Other implementations.** Every cache is the same nginx prototype. Mixed deployments are covered by the prototype's [integration tests](https://github.com/randomizedcoder/nginx-tests/tree/http-cache-millisecond-freshness), not here.

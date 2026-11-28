@@ -1,0 +1,50 @@
+{
+  "layers": 5,
+  "seconds": 10,
+  "connections": 4,
+  "delays_ms": [
+    1,
+    10,
+    25,
+    75,
+    6
+  ],
+  "modes": [
+    "origin",
+    "trusted",
+    "trusted",
+    "trusted",
+    "trusted"
+  ],
+  "lock": false,
+  "results": [
+    {
+      "path": "/second",
+      "policy": "max-age=1",
+      "responses": 193372,
+      "staleness_ms": {
+        "mean": 1011.6,
+        "p50": 1000.0,
+        "p90": 1719.0,
+        "p99": 1856.0,
+        "max": 1880.0
+      },
+      "origin_requests_per_second": 2.0,
+      "wrk_non_2xx": 0
+    },
+    {
+      "path": "/fine",
+      "policy": "max-age=0, max-age-ms=100",
+      "responses": 156,
+      "staleness_ms": {
+        "mean": 133.8,
+        "p50": 129.0,
+        "p90": 145.0,
+        "p99": 228.0,
+        "max": 228.0
+      },
+      "origin_requests_per_second": 10.8,
+      "wrk_non_2xx": 0
+    }
+  ]
+}

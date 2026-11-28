@@ -5,7 +5,7 @@ Dave Seddon · Discussion proposal for the HTTP Working Group · [Internet-Draft
 ## Summary
 
 - **Problem.** HTTP expresses freshness and age in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between.
-- **Today.** The limit is in the wire format, not in every implementation. Of eleven browser engines and caches we read, Chromium, WebKit and Varnish already decide freshness at sub-second resolution, three more store a finer time and round it, and five use whole seconds throughout. None can be told a sub-second lifetime in a standard way. [Survey](#what-implementations-do-today)
+- **Today.** The limit is in the wire format, not in every implementation. Of eleven browser engines and caches we read, Chromium, WebKit, Varnish and Souin already compare age with the lifetime at sub-second resolution, two more measure age more finely and reduce it to seconds, and five use whole seconds throughout. None can be told a sub-second lifetime in a standard way. [Survey](#what-implementations-do-today)
 - **Aim.** Let the wire format carry what those implementations already measure, and give the rest a defined target.
 - **Proposal.** Millisecond companions for the cache directives that carry a duration and for the Age response field, so that each cache counts the time already spent upstream.
 - **Scope.** Every whole-second duration in HTTP caching, plus Retry-After and Prefer `wait`. Appendix A lists each field and what we left unchanged.
@@ -197,35 +197,65 @@ libcurl does not maintain an HTTP representation cache. An application can alrea
 
 We read the source of three browser engines and eight caches in November 2026 to see where the whole-second limit actually lives. The question for each: at what resolution does it measure the age of a stored response, and at what resolution can it be told a lifetime?
 
-| Implementation | Age measured internally | Effective freshness resolution | `Age` it sends | Given `max-age=0.2` |
+| Implementation | Age measured in | Age compared with the lifetime in | `Age` it sends | Given `max-age=0.2` |
 |---|---|---|---|---|
-| Chromium | Microseconds | Sub-second | n/a | Network cache ignores the directive |
-| WebKit (Safari) | Floating-point seconds | Sub-second | n/a | Uses 200 ms |
-| Firefox | Whole seconds | One second | n/a | Truncates to 0 and stops reading the field |
-| Varnish | Floating-point seconds | Sub-second | Whole seconds | Truncates to 0 |
-| Envoy cache filter | Sub-second type | One second: age is cast to seconds | Whole seconds | Ignores the directive |
-| Apache httpd `mod_cache` | Microseconds | One second: compared in seconds | Whole seconds | Ignores the directive |
-| Souin (Caddy cache) | Nanoseconds | One second | Whole seconds, rounded up | Ignores the directive |
-| nginx | Whole seconds | One second | None | Does not cache the response |
-| Squid | Whole seconds | One second | Whole seconds | Truncates to 0 |
-| Apache Traffic Server | Whole seconds | One second | Whole seconds | Truncates to 0 |
-| HAProxy cache | Whole seconds | One second | Whole seconds | Truncates to 0 |
+| Chromium | Microseconds | Microseconds | None found | Network cache ignores the directive; the renderer's memory cache uses 200 ms |
+| WebKit (Safari) | Floating-point seconds | Floating-point seconds | None found | Uses 200 ms |
+| Varnish Cache | Floating-point seconds | Floating-point seconds | Whole seconds, rounded down | Reads 0 |
+| Souin (Caddy cache) | Nanoseconds | Nanoseconds, against a stored expiry time | Whole seconds, rounded up | Rejects the whole field and does not store the response |
+| Apache httpd `mod_cache` | Microseconds | Whole seconds: the age is divided down first | Whole seconds, rounded down | Ignores the directive |
+| Envoy cache filters | System clock resolution | Whole seconds: the age is cast down first | Whole seconds, rounded down | Ignores the directive |
+| Firefox | Whole seconds | Whole seconds | None found | Reads 0 and drops the rest of the field |
+| nginx | Whole seconds | Whole seconds | None | Does not cache the response |
+| Squid | Whole seconds | Whole seconds | Whole seconds | Reads 0 |
+| Apache Traffic Server | Whole seconds | Whole seconds | Whole seconds | Ignores the directive |
+| HAProxy cache | Whole seconds | Whole seconds | Whole seconds | Reads 0, then does not store the response |
+
+Notes on the table:
+
+- **"Compared in microseconds"** means a `max-age=1` response becomes stale one second after it was received, not at the next tick of a seconds counter. The lifetime itself still comes from a whole-second field.
+- **Chromium has two caches.** The network cache and the renderer's memory cache both use microseconds, but parse `max-age` differently.
+- **Varnish.** The operator can set a sub-second lifetime in VCL. The GitHub repository now points to a successor, Vinyl Cache; the lines cited are the same in both.
+- **Souin.** The current time is taken from the request's `Date` field when it has one, which is whole seconds.
+- **Apache httpd.** The lifetime is a whole number and the test is "age less than lifetime", so dividing the age down changes no outcome for `max-age`. It could not represent a sub-second lifetime.
+- **Envoy.** Both the `cache` and `cache_v2` filters. A response is stale once the age cast to seconds exceeds the lifetime, so it can be reused for up to a second longer.
+- **WebKit.** WebKit's own cache code only. The platform network libraries it runs on were not read.
+- **"None found"** means no code generating `Age` in the directories read.
 
 What the survey shows:
 
-- **Three of eleven already decide freshness at sub-second resolution**: Chromium, WebKit and Varnish. In those, the wire format is the coarsest part. Three more store a finer type and round to seconds before comparing.
-- **Five are whole seconds throughout.** For them the proposal is new work, not catching up. Firefox, nginx, Squid, Traffic Server and HAProxy are in this group.
+- **Four of eleven already compare age with the lifetime at sub-second resolution**: Chromium, WebKit, Varnish and Souin. In those, the wire format is the coarsest part. Two more, Apache httpd and Envoy, measure age more finely and reduce it to seconds before comparing.
+- **Five are whole seconds throughout.** For them the proposal is new work, not catching up. Firefox, nginx, Squid, Traffic Server and HAProxy are in this group. Firefox's source says so: "The input information for age and freshness calculation are in seconds. Hence, the internal logic can't have better resolution than seconds too."
 - **No implementation can be told a sub-second lifetime by an origin in a standard way.** Operators who want one today use private configuration. Varnish documents millisecond durations in VCL, and Fastly documents a duration type with an `ms` suffix. Cloudflare and CloudFront document a minimum of one second.
-- **Those that emit `Age` use whole seconds**, including Varnish, which knows the fraction and discards it. The nginx baseline emits none. The proposal carries fractional age between participating tiers; it is not a general repair for missing Age handling.
-- **A fractional `max-age` has four different outcomes** across these implementations: used, truncated to zero, directive ignored, or response not cached. That is the evidence for a separate companion with a valid base, and against decimal seconds.
+- **Those that emit `Age` use whole seconds**, including Varnish, which knows the fraction and discards it. nginx emits none and does not read one. The proposal carries fractional age between participating tiers; it is not a general repair for missing Age handling.
+- **A fractional `max-age` has four different outcomes** across these implementations: used, read as zero, directive ignored, or response not stored. Chromium's two caches give two of them. Varnish's parser accepts the point on purpose, with the comment "We accept '.' to be future compatible with fractional seconds", and discards the fraction. That is the evidence for a separate companion with a valid base, and against decimal seconds.
 
 So the accurate statement is narrower than "implementations are already sub-second". Some widely used ones are, most are not, and none of them can agree on a sub-second lifetime because HTTP has no way to express one.
 
 Limits of the survey: it is a source read, not an interoperability or shipping-product test. Not confirmed: whether Fastly's cache honours a sub-second lifetime. The CDN figures come from public documentation only.
 
-Source provenance is recorded in [survey-sources.csv](survey-sources.csv): repository path, source URL, recovered commit where available, and SHA-256 and Git blob identities of retained source files. The WebKit files were byte-matched against commit `653d68255fdfb2e61001c00bfe40714b3f23f7a6`; the nginx baseline is `2e8440bcdc438f0f1cd03da778a3843ddb3c86d9`. Other original reads did not retain a commit identifier. Their moving-branch links below are navigation aids, not immutable evidence; the hashes identify the reviewed bytes but do not establish a repository revision. Recovering those commits or repeating the survey at pinned revisions remains open. No current branch head is substituted for an unrecorded historical revision.
+Limits of the reading itself:
 
-Sources: Varnish [`cache_rfc2616.c`](https://github.com/varnishcache/varnish-cache/blob/master/bin/varnishd/cache/cache_rfc2616.c), [VCL durations](https://varnish-cache.org/docs/trunk/reference/vcl.html) · Squid [`refresh.cc`](https://github.com/squid-cache/squid/blob/master/src/refresh.cc) · Traffic Server [`MIME.cc`](https://github.com/apache/trafficserver/blob/master/src/proxy/hdrs/MIME.cc) · HAProxy [`cache.c`](https://github.com/haproxy/haproxy/blob/master/src/cache.c) · Envoy [`cache_headers_utils.cc`](https://github.com/envoyproxy/envoy/blob/main/source/extensions/filters/http/cache/cache_headers_utils.cc) · httpd [`cache_util.c`](https://github.com/apache/httpd/blob/trunk/modules/cache/cache_util.c) · Souin [`pkg/rfc`](https://github.com/darkweak/souin/tree/master/pkg/rfc) · nginx [`ngx_http_upstream.c`](https://github.com/nginx/nginx/blob/2e8440bcdc438f0f1cd03da778a3843ddb3c86d9/src/http/ngx_http_upstream.c). Browser sources are listed in the next section.
+- **One revision each.** The table describes the commits below, read on 27 November 2026. Released versions may differ.
+- **Read, not run.** Outcomes for `max-age=0.2` are traced through each parser by hand. Where the last step is a standard library function, such as `strtol` or `strconv.ParseUint`, its documented behaviour is assumed.
+- **Not read.** HTTP/2 and HTTP/3 timestamps in Chromium, memory caches in Firefox other than the style sheet cache, storage back ends in Envoy and Souin, and how each cache treats a response once its `max-age` has been ignored.
+
+| Implementation | Commit | Where to look |
+|---|---|---|
+| Chromium, network cache | `acd38aea` | freshness test [`http_response_headers.cc:1269`](https://chromium.googlesource.com/chromium/src/+/acd38aea114059ede9cbae99084b9b80c59c4ad7/net/http/http_response_headers.cc#1269); digits-only parser, line 929 |
+| Chromium, memory cache | `acd38aea` | freshness test [`resource.cc:633`](https://chromium.googlesource.com/chromium/src/+/acd38aea114059ede9cbae99084b9b80c59c4ad7/third_party/blink/renderer/platform/loader/fetch/resource.cc#633); floating-point parser [`http_parsers.cc:917`](https://chromium.googlesource.com/chromium/src/+/acd38aea114059ede9cbae99084b9b80c59c4ad7/third_party/blink/renderer/platform/network/http_parsers.cc#917) |
+| WebKit | `6d74a822` | age [`CacheValidation.cpp:115`](https://github.com/WebKit/WebKit/blob/6d74a822d0bfbf573a552c00fddfae56fa63481e/Source/WebCore/platform/network/CacheValidation.cpp#L115); parser, line 321; tests [`CachedResource.cpp:416`](https://github.com/WebKit/WebKit/blob/6d74a822d0bfbf573a552c00fddfae56fa63481e/Source/WebCore/loader/cache/CachedResource.cpp#L416) and [`NetworkCache.cpp:225`](https://github.com/WebKit/WebKit/blob/6d74a822d0bfbf573a552c00fddfae56fa63481e/Source/WebKit/NetworkProcess/cache/NetworkCache.cpp#L225) |
+| Firefox | `ac1fc475` | freshness test and comment [`nsHttp.cpp:380`](https://github.com/mozilla-firefox/firefox/blob/ac1fc4756876469bc1ea6f7e610c3c240cb14a26/netwerk/protocol/http/nsHttp.cpp#L380); parser [`CacheControlParser.cpp:68`](https://github.com/mozilla-firefox/firefox/blob/ac1fc4756876469bc1ea6f7e610c3c240cb14a26/netwerk/protocol/http/CacheControlParser.cpp#L68) |
+| Varnish Cache | `0038dd19` | freshness test [`cache_hash.c:572`](https://github.com/varnishcache/varnish-cache/blob/0038dd19804fd92cd8bd4bfe92e5a515a57d5e8e/bin/varnishd/cache/cache_hash.c#L572); `Age` [`cache_req_fsm.c:169`](https://github.com/varnishcache/varnish-cache/blob/0038dd19804fd92cd8bd4bfe92e5a515a57d5e8e/bin/varnishd/cache/cache_req_fsm.c#L169); parser [`cache_rfc2616.c:74`](https://github.com/varnishcache/varnish-cache/blob/0038dd19804fd92cd8bd4bfe92e5a515a57d5e8e/bin/varnishd/cache/cache_rfc2616.c#L74). Vinyl Cache `b91c1d5d` has the same lines |
+| Souin | `2acc7971` | freshness test [`cache_status.go:43`](https://github.com/darkweak/souin/blob/2acc79712a434fdc9efea54f8b36221fac0b7957/pkg/rfc/cache_status.go#L43); `Age`, line 155; rejected field [`middleware.go:498`](https://github.com/darkweak/souin/blob/2acc79712a434fdc9efea54f8b36221fac0b7957/pkg/middleware/middleware.go#L498); parser in `pquerna/cachecontrol` v0.2.0 |
+| Apache httpd | `352229d7` | age [`cache_util.c:257`](https://github.com/apache/httpd/blob/352229d736c444313a9f84a20cce66c3e8679f59/modules/cache/cache_util.c#L257); freshness test, line 698; parser, line 1092 |
+| Envoy | `4bc24ca6` | age [`cache_headers_utils.cc:244`](https://github.com/envoyproxy/envoy/blob/4bc24ca62bd084472b2a9b120a474a9816e4a25e/source/extensions/filters/http/cache/cache_headers_utils.cc#L244); parser, line 36; freshness test [`http_cache.cc:112`](https://github.com/envoyproxy/envoy/blob/4bc24ca62bd084472b2a9b120a474a9816e4a25e/source/extensions/filters/http/cache/http_cache.cc#L112) |
+| nginx | `e76b6746` | freshness test [`ngx_http_file_cache.c:658`](https://github.com/nginx/nginx/blob/e76b6746c92d8b1167f361977032d123f8f92393/src/http/ngx_http_file_cache.c#L658); parser [`ngx_http_upstream.c:5153`](https://github.com/nginx/nginx/blob/e76b6746c92d8b1167f361977032d123f8f92393/src/http/ngx_http_upstream.c#L5153) |
+| Squid | `76d81316` | freshness test [`refresh.cc:146`](https://github.com/squid-cache/squid/blob/76d813169215a82dea60b8a0820d0b100120263e/src/refresh.cc#L146); parser [`HttpHeaderTools.cc:87`](https://github.com/squid-cache/squid/blob/76d813169215a82dea60b8a0820d0b100120263e/src/HttpHeaderTools.cc#L87); `Age` [`client_side_reply.cc:1286`](https://github.com/squid-cache/squid/blob/76d813169215a82dea60b8a0820d0b100120263e/src/client_side_reply.cc#L1286) |
+| Apache Traffic Server | `b23bcc2f` | freshness test [`HttpTransact.cc:8071`](https://github.com/apache/trafficserver/blob/b23bcc2fb20fc014a44c8973eec03226ec5a79e4/src/proxy/http/HttpTransact.cc#L8071); ignored directive [`MIME.cc:4059`](https://github.com/apache/trafficserver/blob/b23bcc2fb20fc014a44c8973eec03226ec5a79e4/src/proxy/hdrs/MIME.cc#L4059) |
+| HAProxy | `c2852d5b` | parser [`cache.c:1109`](https://github.com/haproxy/haproxy/blob/c2852d5b7c27fb93abc1cfb3246e6e172481ca17/src/cache.c#L1109); not stored, line 1866; freshness test, line 2779; `Age`, line 2258 |
+
+The lines each entry rests on are quoted in [survey-notes.md](survey-notes.md). The full commit identifiers, each file read and its SHA-256 are in [survey-sources.csv](survey-sources.csv). An earlier reading on 24 November did not record commits for most implementations; this one replaces it and corrected four entries. Per-browser detail is in the next section.
 
 ## Browsers
 
@@ -246,7 +276,7 @@ The facts were read from each engine's source tree on 24 November 2026. They are
 | `max-age=0, max-age-ms=200` today | Stale at once; validates each use | Same | Same |
 | `max-age=1, max-age-ms=200` today | Fresh for one second | Fresh for under one second | Fresh for one second |
 | `Age-Ms` today | Not read | Not read | Not read |
-| `max-age=0.2` today (not proposed) | Network cache ignores the directive | Truncated to 0; rest of the field unread | Used as 200 ms |
+| `max-age=0.2` today (not proposed) | Network cache ignores the directive; memory cache uses 200 ms | Read as 0; rest of the field unread | Used as 200 ms |
 | Time arithmetic | Microseconds | Whole seconds | Floating-point seconds |
 | Stored on disk | Times in microseconds; no stored expiry | Expiry in whole seconds | Timestamp in floating point |
 | Clock used for age | Wall clock | Wall clock | Wall clock |
@@ -270,7 +300,7 @@ Covers Chrome. Browsers built on Chromium, such as Edge, share this network stac
 
 - Freshness and age are computed in microseconds. Request and response times are stored on disk in microseconds. No expiry is stored; freshness is recomputed from the headers on each use.
 - The network cache matches the prefix `max-age=` and accepts digits only. `max-age-ms=200` is ignored. `max-age=0.2` is treated as absent, so the cache falls through to Expires or the heuristic.
-- The renderer has a second parser that reads the value as a floating-point number, so it appears to accept a fraction that the network cache rejects.
+- The renderer's memory cache has a second parser that reads the value as a floating-point number, so it uses `max-age=0.2` as 200 ms where the network cache ignores the directive.
 - `Age` is parsed as an unsigned integer. `Age-Ms` is never read.
 
 **Local caching and concurrency**
@@ -551,7 +581,7 @@ Writing `max-age=0.2` has no safe fallback. [RFC 9111 §4.2.1](https://www.rfc-e
 | Targeted-field parser | The value parses as a Decimal. RFC 9213 says implementations should not consume a max-age with a decimal value. |
 | A recipient that truncates | Sees zero |
 
-Deployed implementations do all of these and more. Of the eleven we read, WebKit uses the fraction, five truncate to zero, four ignore the directive and nginx declines to cache the response. [Survey](#what-implementations-do-today)
+Deployed implementations do all of these and more. Of the eleven we read, WebKit and Chromium's memory cache use the fraction, four read zero, four ignore the directive, including Chromium's network cache, and nginx and Souin decline to store the response. [Survey](#what-implementations-do-today)
 
 None of these lets the origin choose a one-second fallback. A separate companion leaves the base valid for every recipient.
 
@@ -736,9 +766,9 @@ or a case passing is not a claim of complete conformance.
 | Fine stale windows with any eligible freshness source, including Expires | Fine policy needs an explicit max-age or s-maxage lifetime | Known gap for Expires-only freshness. |
 | Response companions in selected targeted fields | No targeted-field implementation | Not implemented; ordinary Cache-Control evidence does not cover RFC 9213 policy selection. |
 | Four request companions where fine age is available | max-age-ms and min-fresh-ms, behind `proxy_cache_fine_request`; max-stale-ms and stale-if-error-ms absent | Partial support. Stock nginx ignores request Cache-Control; opt-in behavior is tested separately. |
-| Age-Ms not generated by default; no finer than the clock readings used | From revision `1c012f600`: clock read for each fine decision; `proxy_cache_fine_age_header`, default `off`; negative age refused; `$upstream_cache_fine_status` and an `info` log line, at most one a second for each reason, say why fine age was not used | 79 header cases and 326 integration tests on 27 November, including `timer_resolution 100ms`. Revision `9198f9a28` had neither behaviour. The tests are at nginx `277ed1967` and nginx-tests `1e94e77`, and each fails when its fix is removed. Enabled per location, not per recipient. Request delay includes connect time, which overstates age. |
+| Age-Ms not generated by default; no finer than the clock readings used | From revision `1c012f600`: clock read for each fine decision; `proxy_cache_fine_age_header`, default `off`; negative age refused; `$upstream_cache_fine_status` and an `info` log line, at most one a second for each reason, say why fine age was not used | 79 header cases and 326 integration tests on 27 November, including `timer_resolution 100ms`. Revision `9198f9a28` had neither behaviour. The tests are at nginx `277ed1967` and nginx-tests `1e94e77`, and each fails when its fix is removed. Later revisions on the branch let `proxy_cache_fine_age_header` take a variable, so that the field goes only to chosen recipients, and keep a fine entry across a restart; their rows are in the nginx README. Request delay includes connect time, which overstates age. |
 | Cache-Status ttl-ms with its base | Variables let the operator compose the pair | Deployment must format and expose the diagnostic appropriately; it is not used as age input. |
-| Recompute policy and age on 304 validation | Merge metadata and serve validated body. From revision `694bc608c` the fine disk entry is updated in place when the stored `Date` and `Cache-Control` keep their length; otherwise it is retired and the next request refills | 10 validation rows, each with an origin-request count. The update is two writes, not one atomic write. The refill is a prototype cost, not an RFC requirement. |
+| Recompute policy and age on 304 validation | Merge metadata and serve validated body. From revision `694bc608c` the fine disk entry is updated in place when the stored `Date` and `Cache-Control` keep their length; otherwise it is retired and the next request refills | 10 validation rows, each with an origin-request count. Later revisions make the update one write. The refill is a prototype cost, not an RFC requirement. |
 | Retry-After-Ms and Prefer wait-ms | Forwarded untouched by nginx | No nginx consumption or native curl implementation. The separate application adapter is not cache-interoperability evidence. |
 
 Reported checks from the prior host session: 51 native header cases, boundary

@@ -79,14 +79,22 @@ use the delta-seconds rule ({{Section 1.2.2 of RFC9111}}). The smallest
 non-zero freshness lifetime is one second.
 
 This limit is a property of the protocol elements. It is not a property of
-every implementation. Among eleven browser engines and caches whose source
-was examined in November 2026, three compared age with the freshness
-lifetime at sub-second resolution, three more stored times at a finer
-resolution and rounded them to seconds, and five used whole seconds
-throughout. Those that generated Age used whole seconds; the surveyed
-nginx baseline did not generate it. An origin server has no standard way
-to state a sub-second lifetime to any of them. This document allows the protocol to carry the
-resolution that some implementations already have.
+every implementation. {{survey}} groups eleven browser engines and caches
+whose source was examined in November 2026 by the resolution at which each
+compared the age of a stored response with its freshness lifetime.
+
+| Age compared with the lifetime in | Implementations |
+|---|---|
+| Sub-second units | Chromium (microseconds), WebKit (floating-point seconds), Varnish Cache (floating-point seconds), Souin (nanoseconds) |
+| Whole seconds, after measuring age more finely | Apache httpd mod_cache (microseconds), Envoy cache filters (system clock resolution) |
+| Whole seconds throughout | Firefox, nginx, Squid, Apache Traffic Server, HAProxy cache |
+{: #survey title="Resolution of the Freshness Decision in Surveyed Implementations"}
+
+The unit in parentheses is that in which the implementation measured age.
+Each cache that generated an Age field sent whole seconds; nginx
+generated none. An origin server has no standard way to state a
+sub-second lifetime to any of them. This document allows the protocol to
+carry the resolution that some implementations already have.
 
 Some resources change more often than that. A live HTTP Live Streaming media
 playlist {{RFC8216}} can change every second or two, and a player that
@@ -1043,11 +1051,15 @@ parts that are correct alone, which tests of single fixes do not show.
 
 | Problem in the prototype | Effect | How to avoid it | Prototype now |
 |--------------------------|--------|-----------------|---------------|
-| After a restart or a clock step, every fine entry is refused at once | All such entries are fetched again together ({{sec-clocks}}) | Record enough to keep the age across a restart, or spread the refetches | Not corrected. Collapsing limits it to one fetch for each response |
-| A request waiting for another's fetch of the same response looked again only every 500 milliseconds | With a lifetime of 200 milliseconds, the response was stale again before the waiting request saw it | Wake waiting requests when the fetch completes ({{sec-load}}) | Partly corrected: the first look is after 5 milliseconds and the interval doubles. A lifetime shorter than the fetch is still not collapsed |
-| An entry validated with a 304 was discarded and fetched in full by the next request | Each validation cost two upstream requests | Update the stored metadata in place ({{validation}}) | Corrected where the stored fields keep their length; otherwise the entry is still discarded |
+| After a restart or a clock step, every fine entry is refused at once | All such entries are fetched again together ({{sec-clocks}}) | Record enough to keep the age across a restart, or spread the refetches | Corrected for a restart of the server: the stored response records the difference between the two clocks. After a clock step, a suspend or a reboot the entry is still refused; it is then validated, and a 304 keeps it |
+| A request waiting for another's fetch of the same response looked again only every 500 milliseconds | With a lifetime of 200 milliseconds, the response was stale again before the waiting request saw it | Wake waiting requests when the fetch completes ({{sec-load}}) | Corrected within one worker process: waiting requests are woken when the fetch ends. A request waiting in another process looks again after 5 milliseconds, then at doubling intervals |
+| A response with a lifetime shorter than its fetch was stale when it arrived | The requests that waited for it could not use it, and each fetched in turn | Give the response a lifetime longer than the fetch, or a stale window ({{sec-load}}) | Not a defect: {{Section 4 of RFC9111}} allows a response to serve collapsed requests only where the cache may reuse it for them. With a stale window, the woken requests are all served the response while one refreshes it |
+| An entry validated with a 304 was discarded and fetched in full by the next request | Each validation cost two upstream requests | Update the stored metadata in place ({{validation}}) | Corrected where the stored fields keep their length, as one write; otherwise the entry is still discarded |
 | Each fallback wrote a log line | A busy path with a bad companion filled the log | Limit the rate of the log, and keep a per-response indication | Corrected: one line a second for each reason |
 | Two configurations shared one store, one with fine age and one without | Each replaced the other's stored format, so shared responses were fetched repeatedly | Do not share a store across the two, or use one stored format | A warning when the configuration is checked |
+| Turning fine age off left every response stored with it unreadable | The whole store was fetched again | Let the whole-second code read the fine format, never past the fine deadline | Corrected: such a response is used in whole seconds and can expire up to a second early |
+| Age-Ms was enabled for a whole configuration block | Every recipient of that block received it, user agents included ({{sec-privacy}}) | Choose the recipients for each request ({{generate}}) | Corrected: the setting can be a per-request value, so that only named downstream caches receive the field |
+| A clock that the unit tests could fix was compiled into the server | Test code was present in the path that decides freshness | Keep test hooks out of the built server | Corrected: the hook exists only in the test build |
 
 Applying request directives is a further point. The server ignored them
 before; the prototype's option to apply them lets any client force an
@@ -1408,9 +1420,10 @@ Decimal seconds:
   what a legacy cache does.
   Existing implementations also differ. Among eleven browser engines and
   caches whose source was examined in November 2026, a value of
-  `max-age=0.2` was used as 200 milliseconds by one, truncated to zero
-  by five and ignored as an invalid directive by four, and one declined
-  to store the response.
+  `max-age=0.2` was used as 200 milliseconds by one, read as zero by
+  four and ignored as an invalid directive by four, and two declined to
+  store the response. One of the four that ignored it has a second cache
+  that used it as 200 milliseconds.
 
 Explicit units:
 : Companions such as `max-age-fine="1250ms"` could also express
@@ -1474,13 +1487,17 @@ complete conformance. The measurements were taken at or before revision
 That revision made the mistakes listed in {{pitfalls}}. Revision
 `1c012f6000664c19691afb552ff8a8abdf360f98` corrects them. Revision
 `694bc608cdd3ecf15b9e35e3f0fc7a2666d0f1a0` corrects four of the later problems in the
-second table there. The measurements have not been repeated with either. nginx enables Age-Ms per location, not per
-recipient.
+second table there, and revision
+`092c1979bbfc425a80cc7c0be60e33aa1b629722` the rest, as
+that table records. Some of the measurements were repeated with that
+source.
 
 Known gaps include targeted fields, the remaining request companions,
 Age-Ms Item parameters and fine stale windows with Expires-only freshness.
 Wall-clock deadlines with a 10 millisecond offset-change guard do not meet
-all the elapsed-time requirements in {{fine-age}}. After validation the prototype updates a fine
+all the elapsed-time requirements in {{fine-age}}. A fine entry is kept
+across a restart of the server and refused after a clock step, a suspend
+or a reboot. After validation the prototype updates a fine
 disk entry in place only when the stored fields keep their length;
 otherwise it retires the entry, causing a later refill. This is not a
 requirement of the protocol. Retry-After-Ms and wait-ms are forwarded

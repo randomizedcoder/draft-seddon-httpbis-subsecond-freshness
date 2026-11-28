@@ -223,6 +223,26 @@ milliseconds of freshness remaining before accounting for its request
 delay and local residence. Any other cache applies `max-age=0`. The sender
 chooses that whole-second fallback in each message.
 
+A deployment would normally also send stale-while-revalidate {{RFC5861}},
+so that a cache can answer requests from the stored response while it
+revalidates. That window is a whole number of seconds too, and the
+smallest window that is not zero is one second. This document defines a
+companion for it in the same way, and the message above is expected to
+appear as:
+
+~~~ http-message
+Cache-Control: max-age=0, max-age-ms=200,
+    stale-while-revalidate=0, stale-while-revalidate-ms=200
+Age: 0
+Age-Ms: 175
+~~~
+
+The downstream cache then has at most 25 milliseconds of freshness,
+followed by 200 milliseconds in which it can serve the stored response
+while it revalidates. A sender that uses `max-age=1,
+stale-while-revalidate=1` today can keep those values as the bases, and
+other caches then behave as they do now ({{examples}}).
+
 A fine age requires configuration that covers the complete path of
 supporting caches, including the paths used after a failure
 ({{fine-age}}). This document is intended for deployments that can
@@ -1006,6 +1026,12 @@ allows up to five times as many validations from each cache. Operators are
 advised to measure the request rate at each tier when shortening a
 lifetime.
 
+A short lifetime is expected to be used with a stale-while-revalidate-ms
+window of similar length. The window lets a cache answer from the stored
+response during each validation. A cache that also collapses concurrent
+requests can then send one validation for many requests
+({{synchronised}}).
+
 ## Synchronised Refreshes {#synchronised}
 
 A shorter lifetime does not spread requests over time. Clients following
@@ -1475,7 +1501,10 @@ that no other directive restricts reuse.
 | `max-age=1, max-age-ms=200, max-age-ms=300` | The fine directive is ignored. The lifetime is one second. |
 | `s-maxage=1, max-age=0, max-age-ms=200` | A shared cache uses one second. A private cache uses 200 ms. |
 | `max-age=0, max-age-ms=200, no-cache` | The response is not reused without validation. |
-| `max-age=0, max-age-ms=200, stale-while-revalidate=0, stale-while-revalidate-ms=200` | Fresh until 200 ms. Can be served stale while revalidating until 400 ms. |
+| `max-age=0, max-age-ms=200, stale-while-revalidate=0, stale-while-revalidate-ms=200` | Fresh until 200 ms. Can be served stale while revalidating until 400 ms. A legacy cache has no fresh reuse and no stale window. |
+| `max-age=1, max-age-ms=200, stale-while-revalidate=1, stale-while-revalidate-ms=200` | Fresh until 200 ms. Can be served stale while revalidating until 400 ms. A legacy cache uses one second for each. |
+| `max-age=0, max-age-ms=200, stale-while-revalidate=1` | Fresh until 200 ms. The stale window has no companion, so it is one second and ends at 1200 ms. |
+| `s-maxage=0, s-maxage-ms=200, stale-while-revalidate=0, stale-while-revalidate-ms=200` | A shared cache has 200 ms of freshness and cannot serve the response stale, because s-maxage implies proxy-revalidate. |
 | `max-age=0, max-age-ms=200, stale-if-error=1, stale-if-error-ms=1500` | Fresh until 200 ms. Can be used when an error is encountered until 1700 ms. |
 
 The following table shows request directives applied to a stored response

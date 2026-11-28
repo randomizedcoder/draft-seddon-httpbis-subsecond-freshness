@@ -9,8 +9,9 @@ This is the working area for the individual Internet-Draft, "Millisecond Resolut
 - **Who it affects.** Live streaming, which we measured. Busy sites whose data changes within a second, such as shopping during a sale and trading, are likely cases that we have not measured.
 - **Age between caches.** A cache also has to count the time a response spent upstream. HTTP does this already, but `Age` carries whole seconds, so the fraction is lost at each hop.
 - **Elsewhere.** Newer protocols count in milliseconds from the start: QUIC, and Media over QUIC Transport, which is designed for live media and gives its cache duration in milliseconds.
-- **The proposal.** Millisecond resolution for HTTP cache lifetimes and age, as companion fields. It is backwards compatible: older caches ignore the companions and apply the whole-second values as they do today.
-- **Evidence.** In a test with twenty simulated players, a 200 ms lifetime delivered new segments as soon as `max-age=0` did, for a fifth of the origin playlist requests. [Measurements](measurements.md)
+- **Stale-while-revalidate.** Production configurations add a stale window so that a cache keeps answering while it refreshes. Its smallest value above zero is also one second, so the same gap applies to it.
+- **The proposal.** Millisecond resolution for HTTP cache lifetimes, stale windows and age, as companion fields. It is backwards compatible: older caches ignore the companions and apply the whole-second values as they do today.
+- **Evidence.** In a test with twenty simulated players, a 200 ms lifetime delivered new segments as soon as `max-age=0` did, for a fifth of the origin playlist requests. Under load, adding a 200 ms stale window cut origin requests from about 42 per segment to 5. [Measurements](measurements.md)
 - **Aim.** Bring HTTP caching up to date, so that HTTP stays a good choice for live and fast-changing content.
 
 ## Contents
@@ -72,6 +73,14 @@ A shield serving a live playlist at age 175 ms of a 200 ms lifetime sends:
 
 ```http
 Cache-Control: max-age=0, max-age-ms=200
+Age: 0
+Age-Ms: 175
+```
+
+In production we would expect a stale-while-revalidate window as well, with its own companion:
+
+```http
+Cache-Control: max-age=0, max-age-ms=200, stale-while-revalidate=0, stale-while-revalidate-ms=200
 Age: 0
 Age-Ms: 175
 ```

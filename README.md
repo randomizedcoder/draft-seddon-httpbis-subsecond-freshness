@@ -2,6 +2,17 @@
 
 This is the working area for the individual Internet-Draft, "Millisecond Resolution for HTTP Durations".
 
+## Executive summary
+
+- **The problem.** With one-second segments, a live video playlist is replaced every second, and every player reloads it. HLS recommends caching it for half the Target Duration, which is 500 ms here. HTTP cannot state that: `max-age=0` allows no fresh reuse and `max-age=1` allows twice the intended time.
+- **Why.** HTTP counts cache lifetimes in whole seconds. That unit was set in January 1997 and has not changed in almost 30 years. One host in our tests answered 25,000 to 44,000 requests from cache in that second.
+- **Who it affects.** Live streaming, which we measured. Busy sites whose data changes within a second, such as shopping during a sale and trading, are likely cases that we have not measured.
+- **Age between caches.** A cache also has to count the time a response spent upstream. HTTP does this already, but `Age` carries whole seconds, so the fraction is lost at each hop.
+- **Elsewhere.** Newer protocols count in milliseconds from the start: QUIC, and Media over QUIC Transport, which is designed for live media and gives its cache duration in milliseconds.
+- **The proposal.** Millisecond resolution for HTTP cache lifetimes and age, as companion fields. It is backwards compatible: older caches ignore the companions and apply the whole-second values as they do today.
+- **Evidence.** In a test with twenty simulated players, a 200 ms lifetime delivered new segments as soon as `max-age=0` did, for a fifth of the origin playlist requests. [Measurements](measurements.md)
+- **Aim.** Bring HTTP caching up to date, so that HTTP stays a good choice for live and fast-changing content.
+
 ## Contents
 
 | Document | What it is |
@@ -34,7 +45,7 @@ To see only the prototype's changes: [nginx compare](https://github.com/randomiz
 
 - **Problem.** HTTP expresses freshness and age in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between.
 - **Cause.** One grammar rule, `delta-seconds`, set by RFC 2068 in January 1997 and unchanged in RFC 9111 (2022). The limit is in the wire format, not in every implementation.
-- **Since 1997.** A disk of that year took about 11 ms to reach data; a current data-centre SSD is specified at 80 µs. NFS, syslog, HLS and TLS session tickets moved to finer units. IPv6 Neighbor Discovery, server-sent events, gRPC, QUIC and Media over QUIC Transport started with them. DNS, cookies and CoAP kept seconds. Chromium has compared age in microseconds since 2008 and WebKit in floating-point seconds since 2009. The draft's Introduction has the timeline and its sources.
+- **Since 1997.** A disk of that year took about 11 ms to reach data; a current data-centre SSD is specified at 80 µs. NFS, syslog, HLS and TLS session tickets moved to finer units. IPv6 Neighbor Discovery, server-sent events, gRPC, QUIC and Media over QUIC Transport started with them. DNS, cookies and CoAP kept seconds. Chromium has compared age in microseconds since 2008 and WebKit in floating-point seconds since 2009. An appendix of the draft has the timeline and its sources.
 - **Other uses.** Live streaming is the measured case. Stock and prices in a sale, market quotations, betting odds and live scores are examples only.
 - **Today.** We read the source of eleven browser engines and caches. Chromium, WebKit, Varnish and Souin already compare age with the lifetime at sub-second resolution. Two more measure age more finely and reduce it to seconds. Five use whole seconds throughout. None can be told a sub-second lifetime in a standard way, and those that emit `Age` use whole seconds; nginx emits none. [Survey](explainer.md#what-implementations-do-today)
 - **Aim.** Let the wire format carry what those implementations already measure, and give the rest a defined target.

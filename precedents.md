@@ -186,7 +186,7 @@ Source: [nginx `timer_resolution`](https://nginx.org/en/docs/ngx_core_module.htm
 
 ## Dates used in the draft's timeline
 
-The Introduction of the draft has a timeline of units of time. Each date and unit in it was read from the document itself on 27 November 2026. Redis, Kafka, POSIX and the Linux settings are left out of the timeline, because the date of the first form was not confirmed from a primary source.
+An appendix of the draft has a timeline of units of time. Each date and unit in it was read from the document itself on 27 November 2026. Redis, Kafka, POSIX and the Linux settings are left out of the timeline, because the date of the first form was not confirmed from a primary source.
 
 | Row | Date and unit | Quoted from |
 |---|---|---|

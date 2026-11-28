@@ -146,24 +146,6 @@ informative:
     target: https://github.com/WebKit/WebKit/blob/de4902e9898f/WebCore/loader/CachedResource.cpp
     date: 2009-06-05
     refcontent: "Revision de4902e9898fff3d0557e3d6e0cb12df51ef6c1e, CachedResource.cpp"
-  CHEETAH:
-    title: "Cheetah 4LP Family: ST34501N/W/WC/WD/DC Product Manual, Volume 1"
-    author:
-      - org: Seagate Technology, Inc.
-    target: https://www.seagate.com/support/disc/manuals/scsi/29120b.pdf
-    date: 1997-07
-    refcontent: "Publication number 83329120, Rev. B"
-  MICRON7450:
-    title: "Micron 7450 NVMe SSD product brief"
-    author:
-      - org: Micron Technology, Inc.
-    target: https://www.micron.com/content/dam/micron/global/public/products/product-flyer/7450-nvme-ssd-product-brief.pdf
-  MEASUREMENTS:
-    title: "Measurements of a prototype of millisecond HTTP freshness"
-    author:
-      - name: Dave Seddon
-    target: https://github.com/randomizedcoder/draft-seddon-httpbis-subsecond-freshness/blob/main/measurements.md
-    date: 2026-11
   PRECEDENTS:
     title: "Finer time resolution in other systems"
     author:
@@ -180,13 +162,12 @@ informative:
 
 --- abstract
 
-HTTP expresses freshness lifetimes and response age in whole seconds, a
-unit chosen in 1997 and unchanged since. An origin server can therefore
-ask for a response to be reused for zero seconds or for one second, with
-nothing in between. A cache can now answer many thousands of requests in
-that second, some resources change within it, and some widely deployed
-caches already measure age more finely than the protocol can state. This
-document defines
+HTTP expresses freshness lifetimes and response age in whole seconds. An
+origin server can ask for a response to be reused for zero seconds or for
+one second, with nothing in between, and a cache cannot report a fraction
+of a second of age to the next cache. Some resources, such as live video
+playlists, have a useful lifetime between those values. This document
+defines
 millisecond companions for the cache directives that carry a duration, for
 the Age response header field and for the ttl parameter of Cache-Status. It
 also defines companions for the Retry-After header field and the wait
@@ -198,178 +179,68 @@ specification continue to operate as they do today.
 
 # Introduction
 
-## A Unit Chosen in 1997 {#unit}
+HTTP caching lets an origin server trade freshness against request load,
+but it expresses freshness lifetimes in whole seconds {{RFC9111}}. For a
+resource that changes often, the difference between immediate staleness
+and one second of freshness can be large. A shorter period of reuse could
+absorb repeated requests and still let a change become visible sooner. An
+origin server cannot state such a period with the standard cache
+directives.
 
-An origin server can ask a cache to reuse a response for zero seconds or
-for one second. HTTP gives it no way to ask for anything in between.
+Live video playlists are an example {{RFC8216}}. The draft second edition
+of HTTP Live Streaming recommends that successful responses to non-blocking playlist
+requests be cached for half the Target Duration
+{{I-D.pantos-hls-rfc8216bis}}. With a Target Duration of one second, that
+is 500 milliseconds. HTTP cannot express this lifetime: `max-age=0` allows
+no fresh reuse, and `max-age=1` allows twice the intended period. Other
+resources that many clients request at once and that change within a
+second, such as prices during a sale or market quotations, could have the
+same need. No benefit has been measured for them.
 
-The cause is one grammar rule. HTTP/1.1 defined delta-seconds as a whole
-number of seconds in January 1997 ({{Section 3.3.2 of RFC2068}}). The rule
-was carried unchanged through {{RFC2616}} in 1999 and {{RFC7234}} in 2014,
-and is the same in {{Section 1.2.2 of RFC9111}}, published in 2022.
-Freshness lifetimes and the Age header field use it. So does each duration
-added to HTTP caching since: the stale-while-revalidate and stale-if-error
-windows {{RFC5861}}, and the ttl parameter of Cache-Status {{RFC9211}}, which
-is also a whole number of seconds.
+Stating the lifetime is only part of the problem. A cache also has to
+account for the time a response has already spent upstream. HTTP defines
+that accounting across cache tiers ({{Section 4.2.3 of RFC9111}}), but the
+Age header field carries whole seconds. A cache that reports an estimated
+age of 900 milliseconds as `Age: 0` cannot tell the next cache about those
+900 milliseconds. A millisecond lifetime therefore needs age information
+of matching resolution, or a downstream cache cannot determine how much
+freshness remains.
 
-Finer resolution was raised in the HTTP Working Group in 2011, for sites
-that cache content for a couple of seconds. The response observed that a
-Cache-Control extension could provide higher precision, that such short
-lifetimes had been useful mainly in controlled deployments, and that the
-Date header field has a resolution of one second {{WG2011}}. No such
-extension has been standardised. This document defines one.
+This document defines integer millisecond companions for the cache
+directives that carry a duration and for the age information. For
+example, a cache that has held a response for 175 milliseconds of a 200
+millisecond lifetime sends:
 
-## What Has Changed Since {#changed}
-
-A second was a short time for a cache in 1997. It is a long time now.
-
-A disk drive of that year took about 11 milliseconds to reach a block of
-data {{CHEETAH}}. A solid-state drive now used in data centres is specified
-at 80 microseconds for a random read {{MICRON7450}}. In the measurements
-made for this document, a single host that was also running the origin
-server and the clients answered between 25,000 and 44,000 requests a second
-for one cached playlist {{MEASUREMENTS}}. At such a cache, the step from
-zero seconds to one second is a step from no reuse to tens of thousands of
-reuses.
-
-Resources now change within a second. A live HTTP Live Streaming media
-playlist {{RFC8216}} can change every second or two, and a player that
-receives an outdated playlist waits another reload interval before it
-discovers a new segment. The draft second edition of that specification
-recommends that a successful playlist response be cached for half the
-Target Duration {{I-D.pantos-hls-rfc8216bis}}. For a Target Duration of one
-second that is 500 milliseconds, which HTTP cannot express. An origin
-server that wants its caches to absorb request load for such a resource
-has to choose between immediate staleness and a lifetime comparable to
-the interval at which the resource changes.
-
-Live streaming is the case measured for this document. Other resources
-that many clients request at once and that change within a second include
-stock levels and prices during a sale, market quotations, betting odds and
-live scores. Automated clients that poll such resources add to the request
-rate. These are illustrations, and no benefit has been measured for them.
-Finer freshness does not make a response cacheable, change its cache key
-or authorise sharing private responses.
-
-Other protocols have moved to finer units of time over the same period,
-and protocols specified since have often started with them. {{timeline}}
-shows a selection, followed by three browser engines.
-
-~~~ ascii-art
-                     1990      2000      2010      2020
-                     |         |         |         |
-DNS TTL           s---------------------------------------> s
-NFS file times      us----ns------------------------------> ns
-IPv6 ND timers             ms-----------------------------> ms
-Cookie Max-Age              s-----------------------------> s
-syslog time                     s-------us----------------> us
-TLS tickets                            s---------ms-------> ms
-SSE reconnect                           ms----------------> ms
-HLS durations                           s/dec-------------> dec
-CoAP Max-Age                                 s------------> s
-gRPC timeout                                  ns----------> ns
-QUIC idle time                                      ms----> ms
-MoQ cache time                                         ms-> ms
-HTTP caching                s=============================> s
-
-Freshness arithmetic in browser engines:
-Firefox                         s-------------------------> s
-Chromium                               us-----------------> us
-WebKit                                  fp----------------> fp
+~~~ http-message
+Cache-Control: max-age=0, max-age-ms=200
+Age: 0
+Age-Ms: 175
 ~~~
-{: #timeline title="Units of Time in HTTP Caching and in Other Protocols"}
 
-Each protocol row starts in the year the unit was first specified and
-shows any later change: "s" is whole seconds, "ms" milliseconds, "us" microseconds, "ns" nanoseconds and "dec" decimal
-seconds. Each browser row starts at the earliest revision examined and
-shows the unit in which that engine compared age with the freshness
-lifetime; "fp" is floating-point seconds. {{timeline-data}} gives the same
-information with its sources.
+A downstream cache that implements this specification, and that is
+configured to rely on the sender's Age-Ms value, has at most 25
+milliseconds of freshness remaining before accounting for its request
+delay and local residence. Any other cache applies `max-age=0`. The sender
+chooses that whole-second fallback in each message.
 
-| Element | First specified | Unit | Changed | Unit |
-|---|---|---|---|---|
-| DNS time to live {{RFC1035}} | November 1987 | seconds | | |
-| NFS file times {{RFC1094}} {{RFC1813}} | March 1989 | seconds and microseconds | June 1995 | seconds and nanoseconds |
-| IPv6 Neighbor Discovery reachable time and retransmission timer {{RFC1970}} | August 1996 | milliseconds | | |
-| Cookie Max-Age {{RFC2109}} {{RFC6265}} | February 1997 | seconds | | |
-| syslog timestamp {{RFC3164}} {{RFC5424}} | August 2001 | seconds | March 2009 | up to microseconds |
-| TLS session tickets {{RFC5077}} {{RFC8446}} | January 2008 | lifetime in seconds | August 2018 | ticket age in milliseconds, beside a lifetime in seconds |
-| Server-sent events reconnection time {{SSE-2009}} | April 2009 | milliseconds | | |
-| HLS segment duration {{HLS-00}} {{HLS-05}} | May 2009 | integer seconds | November 2010 | decimal seconds |
-| CoAP Max-Age {{RFC7252}} | June 2014 | seconds | | |
-| gRPC over HTTP/2 timeout {{GRPC-HTTP2}} | August 2015 | a unit letter, from hours to nanoseconds | | |
-| QUIC idle timeout {{RFC9000}} | May 2021 | milliseconds | | |
-| MoQ cache duration {{MOQT-06}} | September 2024 | milliseconds | | |
-| HTTP freshness and age {{RFC2068}} {{RFC9111}} | January 1997 | seconds | | |
-| Firefox freshness calculation {{FIREFOX-2001}} | May 2001 | seconds | | |
-| Chromium freshness calculation {{CHROMIUM-2008}} | July 2008 | microseconds | | |
-| WebKit freshness calculation {{WEBKIT-2009}} | June 2009 | floating-point seconds | | |
-{: #timeline-data title="Dates and Units Shown in the Timeline"}
+A fine age requires configuration that covers the complete path of
+supporting caches, including the paths used after a failure
+({{fine-age}}). This document is intended for deployments that can
+maintain that configuration. It gives finer control over the reuse a
+cache is permitted. When a client observes a change still depends on its
+polling, on the coordination of refreshes and on network delay
+({{timeliness}}).
 
-Not every protocol changed: the DNS, cookies and the Constrained
-Application Protocol kept whole seconds. One change resembles the one
-proposed here. TLS 1.3 kept the ticket lifetime in seconds and added a
-ticket age in milliseconds beside it ({{Section 4.2.11.1 of RFC8446}}).
-The gRPC date is that of the earliest revision of its specification
-examined. HLS made its
-change without affecting older clients, by allowing decimal durations only
-in a playlist that declares version 3 or higher. Media over QUIC Transport
-is an Internet-Draft, and its parameter can change.
+The arithmetic is not new to every implementation. Of eleven browser
+engines and caches whose source was examined in November 2026, four
+compared age with the freshness lifetime at a resolution finer than one
+second ({{survey}}). None can be given a sub-second lifetime by a standard
+field. {{background}} gives the history of the whole-second unit and the
+units used by other protocols.
 
-Sub-second durations are also carried in HTTP fields today, outside
-the HTTP specifications. A gRPC request states its timeout in a
-grpc-timeout field, with a unit that can be as small as a nanosecond
-{{GRPC-HTTP2}}. Envoy reads a request timeout in milliseconds from the
-x-envoy-upstream-rq-timeout-ms field {{ENVOY-ROUTER}}. Client libraries
-from two vendors read a retry-after-ms response field as well as
-Retry-After {{OPENAI-CLIENT}} {{AZURE-CORE}}. Server-sent events state the reconnection
-time in milliseconds within the response content {{SSE-2009}}. None of
-these is a cache lifetime, and each was defined without a common rule
-for the unit.
+## Companions Defined {#this-document}
 
-The browser rows do not show a change. Chromium has compared age with the
-freshness lifetime in microseconds since its source was first published,
-and WebKit in floating-point seconds since it began to calculate
-freshness itself. Firefox has used whole seconds since at least 2001.
-None of these dates marks a move from whole seconds.
-
-Caches differ in the same way. {{survey}} groups eleven
-browser engines and caches whose source was examined in November 2026 by
-the resolution at which each compared the age of a stored response with
-its freshness lifetime.
-
-| Age compared with the lifetime in | Implementations |
-|---|---|
-| Sub-second units | Chromium (microseconds), WebKit (floating-point seconds), Varnish Cache (floating-point seconds), Souin (nanoseconds) |
-| Whole seconds, after measuring age more finely | Apache httpd mod_cache (microseconds), Envoy cache filters (system clock resolution) |
-| Whole seconds throughout | Firefox, nginx, Squid, Apache Traffic Server, HAProxy cache |
-{: #survey title="Resolution of the Freshness Decision in Surveyed Implementations"}
-
-The unit in parentheses is that in which the implementation measured age.
-Each cache that generated an Age field sent whole seconds; nginx
-generated none. An origin server has no standard way to state a
-sub-second lifetime to any of them. The limit is in the protocol
-elements, not in every implementation.
-
-Protocols designed more recently for live media count in milliseconds from
-the start. Media over QUIC Transport expresses the time an object can be
-served from a relay's cache in milliseconds {{I-D.ietf-moq-transport}}, and
-QUIC expresses its idle timeout in milliseconds
-({{Section 18.2 of RFC9000}}). HTTP caches cannot be given a lifetime in
-that unit.
-
-The whole-second unit also affects age between caches. HTTP accounts for
-upstream age and request delay across cache tiers
-({{Section 4.2.3 of RFC9111}}); it does not grant a new lifetime at each
-tier. However, a cache reporting an estimated age of 900 milliseconds as
-`Age: 0` cannot communicate those 900 milliseconds to the next cache, and
-repeated loss of precision can understate age along a path.
-
-## This Document {#this-document}
-
-This document allows the protocol to carry the resolution that some
-implementations already have. It defines a millisecond companion for each
-of the following:
+This document defines a millisecond companion for each of the following:
 
 | Whole seconds          | Milliseconds              | Used in             | Defined in     |
 |------------------------|---------------------------|---------------------|----------------|
@@ -385,43 +256,13 @@ of the following:
 | Retry-After            | Retry-After-Ms            | response            | {{retry}}      |
 | Prefer wait            | wait-ms                   | request             | {{wait}}       |
 
-For example, a cache that has held a response for 175 milliseconds of a
-200 millisecond lifetime sends:
-
-~~~ http-message
-Cache-Control: max-age=0, max-age-ms=200
-Age: 0
-Age-Ms: 175
-~~~
-
-A downstream cache that implements this specification, and that is
-configured to rely on the sender's Age-Ms value, has at most 25 milliseconds
-of freshness remaining before accounting for its request delay and local
-residence. Any other cache applies `max-age=0`.
-
-The unit is the millisecond, although several entries in {{timeline}} are
-finer. There are three reasons.
-
-- Range. A Structured Fields Integer has fifteen digits {{RFC9651}}. In
-  milliseconds that is more than 31,000 years. In microseconds it is less
-  than 32 years, and in nanoseconds less than 12 days ({{delta-ms}}).
-
-- One unit needs no unit grammar. The gRPC timeout allows six units and at
-  most eight digits, so a value in nanoseconds cannot reach a tenth of a
-  second and a sender has to choose a unit for each value {{GRPC-HTTP2}}.
-  The finest unit is not always used: the gRPC C++ core converts a
-  timeout to milliseconds before sending it, and rounds a received
-  nanosecond or microsecond value up to a whole millisecond {{GRPC-CORE}}.
-
-- Need. The lifetimes that motivate this document are tens to hundreds
-  of milliseconds. No use of a cache lifetime finer than one millisecond
-  has been identified.
-
-A finer companion could follow the same pattern later. {{alternatives}}
-discusses explicit units and that possibility.
+The unit is the millisecond. {{alternatives}} explains why a finer unit
+was not chosen.
 
 This document does not change the behaviour of implementations that do not
-support it. It covers every duration defined by {{RFC9111}}, {{RFC5861}} and
+support it. Finer freshness does not make a response cacheable, change its
+cache key or authorise sharing private responses. This document covers
+every duration defined by {{RFC9111}}, {{RFC5861}} and
 {{RFC9211}}. Retry-After and the wait preference are not part of caching.
 They are included in {{non-cache}} so that the whole-second durations of
 HTTP can be considered together, and that section can be separated if the
@@ -1700,6 +1541,25 @@ Explicit units:
   interfaces for file times moved from seconds to microseconds and then to
   nanoseconds, with new names each time {{PRECEDENTS}}.
 
+A finer unit:
+: Several entries in {{timeline}} are finer than a millisecond. The
+  millisecond was chosen for three reasons.
+
+  Range. A Structured Fields Integer has fifteen digits {{RFC9651}}. In
+  milliseconds that is more than 31,000 years. In microseconds it is less
+  than 32 years, and in nanoseconds less than 12 days ({{delta-ms}}).
+
+  One unit needs no unit grammar. The gRPC timeout allows six units and at
+  most eight digits, so a value in nanoseconds cannot reach a tenth of a
+  second and a sender has to choose a unit for each value {{GRPC-HTTP2}}.
+  The finest unit is not always used: the gRPC C++ core converts a
+  timeout to milliseconds before sending it, and rounds a received
+  nanosecond or microsecond value up to a whole millisecond {{GRPC-CORE}}.
+
+  Need. The lifetimes that motivate this document are tens to hundreds
+  of milliseconds. No use of a cache lifetime finer than one millisecond
+  has been identified.
+
 One general mechanism:
 : This document adds ten names. Each needs registration, parsing and
   tests, and other systems that added names per unit later consolidated
@@ -1736,6 +1596,141 @@ from a heuristic therefore keeps a whole-second lifetime
 | Strict-Transport-Security max-age, Expect-CT max-age, Set-Cookie Max-Age | Security policy and cookie retention, with their own expiry rules. |
 | Web Push TTL | Bounds how long a push service retains a message for a device that is offline. |
 | Signature created and expires parameters | Bound the acceptance of a signature. Their specification states that sub-second precision is not supported. |
+
+# Background: Units of Time in HTTP and Other Protocols {#background}
+
+This appendix records where the whole-second unit of HTTP caching comes
+from, and the units that other protocols and some implementations use. It
+is context for the proposal and can be removed before publication.
+
+## The Whole-Second Unit in HTTP {#unit}
+
+The whole-second unit comes from one grammar rule. HTTP/1.1 defined delta-seconds as a whole
+number of seconds in January 1997 ({{Section 3.3.2 of RFC2068}}). The rule
+was carried unchanged through {{RFC2616}} in 1999 and {{RFC7234}} in 2014,
+and is the same in {{Section 1.2.2 of RFC9111}}, published in 2022.
+Freshness lifetimes and the Age header field use it. So does each duration
+added to HTTP caching since: the stale-while-revalidate and stale-if-error
+windows {{RFC5861}}, and the ttl parameter of Cache-Status {{RFC9211}}, which
+is also a whole number of seconds.
+
+Finer resolution was raised in the HTTP Working Group in 2011, for sites
+that cache content for a couple of seconds. The response observed that a
+Cache-Control extension could provide higher precision, that such short
+lifetimes had been useful mainly in controlled deployments, and that the
+Date header field has a resolution of one second {{WG2011}}. No such
+extension has been standardised.
+
+## Other Protocols {#changed}
+
+Other protocols have moved to finer units of time since 1997,
+and protocols specified since have often started with them. {{timeline}}
+shows a selection, followed by three browser engines.
+
+~~~ ascii-art
+                     1990      2000      2010      2020
+                     |         |         |         |
+DNS TTL           s---------------------------------------> s
+NFS file times      us----ns------------------------------> ns
+IPv6 ND timers             ms-----------------------------> ms
+Cookie Max-Age              s-----------------------------> s
+syslog time                     s-------us----------------> us
+TLS tickets                            s---------ms-------> ms
+SSE reconnect                           ms----------------> ms
+HLS durations                           s/dec-------------> dec
+CoAP Max-Age                                 s------------> s
+gRPC timeout                                  ns----------> ns
+QUIC idle time                                      ms----> ms
+MoQ cache time                                         ms-> ms
+HTTP caching                s=============================> s
+
+Freshness arithmetic in browser engines:
+Firefox                         s-------------------------> s
+Chromium                               us-----------------> us
+WebKit                                  fp----------------> fp
+~~~
+{: #timeline title="Units of Time in HTTP Caching and in Other Protocols"}
+
+Each protocol row starts in the year the unit was first specified and
+shows any later change: "s" is whole seconds, "ms" milliseconds, "us" microseconds, "ns" nanoseconds and "dec" decimal
+seconds. Each browser row starts at the earliest revision examined and
+shows the unit in which that engine compared age with the freshness
+lifetime; "fp" is floating-point seconds. {{timeline-data}} gives the same
+information with its sources.
+
+| Element | First specified | Unit | Changed | Unit |
+|---|---|---|---|---|
+| DNS time to live {{RFC1035}} | November 1987 | seconds | | |
+| NFS file times {{RFC1094}} {{RFC1813}} | March 1989 | seconds and microseconds | June 1995 | seconds and nanoseconds |
+| IPv6 Neighbor Discovery reachable time and retransmission timer {{RFC1970}} | August 1996 | milliseconds | | |
+| Cookie Max-Age {{RFC2109}} {{RFC6265}} | February 1997 | seconds | | |
+| syslog timestamp {{RFC3164}} {{RFC5424}} | August 2001 | seconds | March 2009 | up to microseconds |
+| TLS session tickets {{RFC5077}} {{RFC8446}} | January 2008 | lifetime in seconds | August 2018 | ticket age in milliseconds, beside a lifetime in seconds |
+| Server-sent events reconnection time {{SSE-2009}} | April 2009 | milliseconds | | |
+| HLS segment duration {{HLS-00}} {{HLS-05}} | May 2009 | integer seconds | November 2010 | decimal seconds |
+| CoAP Max-Age {{RFC7252}} | June 2014 | seconds | | |
+| gRPC over HTTP/2 timeout {{GRPC-HTTP2}} | August 2015 | a unit letter, from hours to nanoseconds | | |
+| QUIC idle timeout {{RFC9000}} | May 2021 | milliseconds | | |
+| MoQ cache duration {{MOQT-06}} | September 2024 | milliseconds | | |
+| HTTP freshness and age {{RFC2068}} {{RFC9111}} | January 1997 | seconds | | |
+| Firefox freshness calculation {{FIREFOX-2001}} | May 2001 | seconds | | |
+| Chromium freshness calculation {{CHROMIUM-2008}} | July 2008 | microseconds | | |
+| WebKit freshness calculation {{WEBKIT-2009}} | June 2009 | floating-point seconds | | |
+{: #timeline-data title="Dates and Units Shown in the Timeline"}
+
+Not every protocol changed: the DNS, cookies and the Constrained
+Application Protocol kept whole seconds. One change resembles the one
+proposed here. TLS 1.3 kept the ticket lifetime in seconds and added a
+ticket age in milliseconds beside it ({{Section 4.2.11.1 of RFC8446}}).
+The gRPC date is that of the earliest revision of its specification
+examined. HLS made its
+change without affecting older clients, by allowing decimal durations only
+in a playlist that declares version 3 or higher. Media over QUIC Transport
+is an Internet-Draft, and its parameter can change.
+
+Sub-second durations are also carried in HTTP fields today, outside
+the HTTP specifications. A gRPC request states its timeout in a
+grpc-timeout field, with a unit that can be as small as a nanosecond
+{{GRPC-HTTP2}}. Envoy reads a request timeout in milliseconds from the
+x-envoy-upstream-rq-timeout-ms field {{ENVOY-ROUTER}}. Client libraries
+from two vendors read a retry-after-ms response field as well as
+Retry-After {{OPENAI-CLIENT}} {{AZURE-CORE}}. Server-sent events state the reconnection
+time in milliseconds within the response content {{SSE-2009}}. None of
+these is a cache lifetime, and each was defined without a common rule
+for the unit.
+
+The browser rows do not show a change. Chromium has compared age with the
+freshness lifetime in microseconds since its source was first published,
+and WebKit in floating-point seconds since it began to calculate
+freshness itself. Firefox has used whole seconds since at least 2001.
+None of these dates marks a move from whole seconds.
+
+## Implementations {#implementations}
+
+{{survey}} groups eleven
+browser engines and caches whose source was examined in November 2026 by
+the resolution at which each compared the age of a stored response with
+its freshness lifetime.
+
+| Age compared with the lifetime in | Implementations |
+|---|---|
+| Sub-second units | Chromium (microseconds), WebKit (floating-point seconds), Varnish Cache (floating-point seconds), Souin (nanoseconds) |
+| Whole seconds, after measuring age more finely | Apache httpd mod_cache (microseconds), Envoy cache filters (system clock resolution) |
+| Whole seconds throughout | Firefox, nginx, Squid, Apache Traffic Server, HAProxy cache |
+{: #survey title="Resolution of the Freshness Decision in Surveyed Implementations"}
+
+The unit in parentheses is that in which the implementation measured age.
+Each cache that generated an Age field sent whole seconds; nginx
+generated none. An origin server has no standard way to state a
+sub-second lifetime to any of them. The limit is in the protocol
+elements, not in every implementation.
+
+Protocols designed more recently for live media count in milliseconds from
+the start. Media over QUIC Transport expresses the time an object can be
+served from a relay's cache in milliseconds {{I-D.ietf-moq-transport}}, and
+QUIC expresses its idle timeout in milliseconds
+({{Section 18.2 of RFC9000}}). HTTP caches cannot be given a lifetime in
+that unit.
 
 # Implementation Status
 

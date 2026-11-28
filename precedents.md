@@ -183,3 +183,52 @@ Each row is a problem recorded above; its sources are in the section for each sy
 By default nginx reads the clock when an event arrives: "By default, gettimeofday() is called each time a kernel event is received." With `timer_resolution` set, "gettimeofday() is only called once per specified interval." The first version of the nginx prototype printed `Age-Ms` to the millisecond from that stored reading, and sent `Age-Ms` to every client. It now reads the clock for each fine decision, treats a negative age as a clock fault, and sends `Age-Ms` only where a directive turns it on. A test with `timer_resolution 100ms` fails against the old behaviour. These changes are in nginx revision `1c012f600` and are newer than the published measurements. The draft lists this and the prototype's other mistakes for implementers, under "Implementation Pitfalls".
 
 Source: [nginx `timer_resolution`](https://nginx.org/en/docs/ngx_core_module.html#timer_resolution)
+
+## Dates used in the draft's timeline
+
+The Introduction of the draft has a timeline of units of time. Each date and unit in it was read from the document itself on 27 November 2026. Redis, Kafka, POSIX and the Linux settings are left out of the timeline, because the date of the first form was not confirmed from a primary source.
+
+| Row | Date and unit | Quoted from |
+|---|---|---|
+| DNS time to live | November 1987, seconds | [RFC 1035 §3.2.1](https://www.rfc-editor.org/rfc/rfc1035.html#section-3.2.1): "a 32 bit signed integer that specifies the time interval that the resource record may be cached"; §4.1.3 gives the unit, as quoted above |
+| NFS file times | March 1989, seconds and microseconds | [RFC 1094 §2.3.4](https://www.rfc-editor.org/rfc/rfc1094.html#section-2.3.4): "The "timeval" structure is the number of seconds and microseconds since midnight January 1, 1970, Greenwich Mean Time." |
+| | June 1995, seconds and nanoseconds | [RFC 1813 §2.6](https://www.rfc-editor.org/rfc/rfc1813.html#section-2.6), under `nfstime3`: "The nfstime3 structure gives the number of seconds and nanoseconds since midnight January 1, 1970 Greenwich Mean Time." |
+| HTTP freshness and age | January 1997, seconds | [RFC 2068 §3.3.2](https://www.rfc-editor.org/rfc/rfc2068.html#section-3.3.2): `delta-seconds  = 1*DIGIT`. June 2022, [RFC 9111 §1.2.2](https://www.rfc-editor.org/rfc/rfc9111.html#section-1.2.2): `delta-seconds  = 1*DIGIT` |
+| syslog timestamp | August 2001, seconds; March 2009, up to microseconds | RFC 3164 and RFC 5424, as quoted under [syslog timestamps](#syslog-timestamps) |
+| HLS segment duration | 1 May 2009, integer seconds | [draft-pantos-http-live-streaming-00](https://datatracker.ietf.org/doc/html/draft-pantos-http-live-streaming-00): ""duration" is an integer that specifies the duration of the media file in seconds." Drafts -01 to -04 say the same |
+| | 19 November 2010, decimal seconds | [draft-pantos-http-live-streaming-05](https://datatracker.ietf.org/doc/html/draft-pantos-http-live-streaming-05): ""duration" is an integer or floating-point number that specifies the duration of the media file in seconds." "Durations MUST be integers if the protocol version of the Playlist file less than 3." |
+| CoAP Max-Age | June 2014, seconds | RFC 7252, as quoted above |
+| QUIC idle timeout | May 2021, milliseconds | RFC 9000, as quoted above |
+| MoQ cache duration | 19 September 2024, milliseconds | [draft-ietf-moq-transport-06 §6.1.1.3](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-06): "MAX_CACHE_DURATION (key 0x04): An integer expressing a number of milliseconds." Draft -05 has no such parameter |
+| IPv6 Neighbor Discovery | August 1996, milliseconds | [RFC 1970 §4.2](https://www.rfc-editor.org/rfc/rfc1970.html#section-4.2): "Reachable Time 32-bit unsigned integer. The time, in milliseconds, that a node assumes a neighbor is reachable after having received a reachability confirmation." |
+| VRRP advertisement interval | April 1998, seconds | [RFC 2338 §5.3.7](https://www.rfc-editor.org/rfc/rfc2338.html#section-5.3.7): "The Advertisement interval indicates the time interval (in seconds) between ADVERTISEMENTS." |
+| | March 2010, centiseconds | [RFC 5798 §5.2.7](https://www.rfc-editor.org/rfc/rfc5798.html#section-5.2.7): "a 12-bit field that indicates the time interval (in centiseconds) between ADVERTISEMENTS"; §2.5: "Sub-second detection of Master VRRP router failure is needed in both IPv4 and IPv6 environments." |
+| TLS session tickets | January 2008, seconds | [RFC 5077 §3.3](https://www.rfc-editor.org/rfc/rfc5077.html#section-3.3): "The value indicates the lifetime in seconds as a 32-bit unsigned integer" |
+| | August 2018, milliseconds beside seconds | [RFC 8446 §4.2.11.1](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.2.11.1): "the "ticket_lifetime" field in the NewSessionTicket message is in seconds but the "obfuscated_ticket_age" is in milliseconds" |
+| BFD intervals | June 2010, microseconds | [RFC 5880 §4.1](https://www.rfc-editor.org/rfc/rfc5880.html#section-4.1): "This is the minimum interval, in microseconds, that the local system would like to use when transmitting BFD Control packets" |
+| Firefox | 11 May 2001, seconds | [Revision a39e8274bc52](https://github.com/mozilla-firefox/firefox/blob/a39e8274bc52/netwerk/protocol/http/src/nsHttpResponseHead.cpp), the oldest for this file in the repository: `ComputeCurrentAge(PRUint32 now, PRUint32 requestTime, PRUint32 *result)`, called with `NowInSeconds()` |
+| Chromium | 26 July 2008, microseconds | [Revision 586acc5fe142](https://github.com/chromium/chromium/blob/586acc5fe142/net/http/http_response_headers.cc), "Add net to the repository": `return lifetime <= GetCurrentAge(request_time, response_time, current_time);` on `TimeDelta` values |
+| WebKit | 5 June 2009, floating-point seconds | [Revision de4902e9898f](https://github.com/WebKit/WebKit/blob/de4902e9898f/WebCore/loader/CachedResource.cpp), "Implement RFC 2616 cache expiration calculations in WebKit instead of relying on the networking layer": `return currentAge() > freshnessLifetime();` on `double` values |
+| Cookie Max-Age | February 1997, seconds; unchanged in April 2011 | [RFC 2109 §4.2.2](https://www.rfc-editor.org/rfc/rfc2109.html#section-4.2.2): "The Max-Age attribute defines the lifetime of the cookie, in seconds." [RFC 6265 §4.1.2.2](https://www.rfc-editor.org/rfc/rfc6265.html#section-4.1.2.2): "represented as the number of seconds until the cookie expires" |
+| Server-sent events | 23 April 2009, milliseconds | [W3C Working Draft of 23 April 2009](https://www.w3.org/TR/2009/WD-eventsource-20090423/): "A reconnection time, in milliseconds." The Recommendation of 3 February 2015 says the same |
+| gRPC timeout | 27 August 2015, hours to nanoseconds | [gRPC over HTTP2, revision 20fa6693f383](https://github.com/grpc/grpc/blob/20fa6693f383/doc/PROTOCOL-HTTP2.md), the oldest for this path: "TimeoutUnit → Hour / Minute / Second / Millisecond / Microsecond / Nanosecond" |
+
+VRRP and BFD are recorded here but are not in the draft's timeline, which keeps to protocols closer to HTTP.
+
+Fields in use that carry sub-second durations, cited in the draft's Introduction and read on 27 November 2026:
+
+- **Envoy.** `x-envoy-upstream-rq-timeout-ms`: "The timeout must be specified in millisecond units." [Router filter documentation](https://github.com/envoyproxy/envoy/blob/4bc24ca62bd0/docs/root/configuration/http/http_filters/router_filter.rst)
+- **openai-python.** "Prefer milliseconds, then seconds", reading `retry-after-ms` before `retry-after`. [`_base_client.py`](https://github.com/openai/openai-python/blob/f2b2399c8615/src/openai/_base_client.py)
+- **azure-core.** Reads `retry-after-ms` and `x-ms-retry-after-ms` when `Retry-After` is absent. [`_utils.py`](https://github.com/Azure/azure-sdk-for-python/blob/ade63f410467/sdk/core/azure-core/azure/core/pipeline/policies/_utils.py)
+
+### gRPC: nanoseconds on the wire, milliseconds in one implementation
+
+Read on 27 November 2026, because the draft uses milliseconds and gRPC allows nanoseconds.
+
+- **The format.** "TimeoutValue → {positive integer as ASCII string of at most 8 digits}", followed by one of six unit letters from "H" to "n". Eight digits of nanoseconds are less than a tenth of a second, so a longer timeout needs a coarser unit. [gRPC over HTTP2](https://github.com/grpc/grpc/blob/c090e1c43943/doc/PROTOCOL-HTTP2.md)
+- **No stated reason.** That document, the gRPC [deadlines guide](https://grpc.io/docs/guides/deadlines/) and the Protocol Buffers `Duration` type do not say why nanoseconds were chosen. `Duration` is "a count of seconds and fractions of seconds at nanosecond resolution". [duration.proto](https://github.com/protocolbuffers/protobuf/blob/main/src/google/protobuf/duration.proto)
+- **The C++ core works in milliseconds.** To send: `return Timeout::FromMillis(duration.millis());`. On receipt of the "n" unit: `timeout = Duration::Milliseconds((x / GPR_NS_PER_MS) + (x % GPR_NS_PER_MS != 0));`, which rounds up to a whole millisecond. [timeout_encoding.cc](https://github.com/grpc/grpc/blob/c090e1c43943/src/core/lib/transport/timeout_encoding.cc)
+- **grpc-java sends nanoseconds** for a timeout under a tenth of a second: `if (timeoutNanos < cutoff) { return timeoutNanos + "n";`, with `cutoff = 100000000`. [GrpcUtil.java](https://github.com/grpc/grpc-java/blob/4a1eda72dc3b/core/src/main/java/io/grpc/internal/GrpcUtil.java)
+- **Google's API guidance puts the unit in the name** of an integer field: "include the meaning (examples: time, duration, delay, latency) and the unit of measurement (valid values: seconds, millis, micros, nanos) as a final suffix. For example, send_time_millis." [AIP-142](https://google.aip.dev/142)
+
+The browser dates are the earliest revisions found, not dates of a change from whole seconds. None of the three was found to have changed its unit.

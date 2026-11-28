@@ -5,6 +5,9 @@ Dave Seddon · Discussion proposal for the HTTP Working Group · [Internet-Draft
 ## Summary
 
 - **Problem.** HTTP expresses freshness and age in whole seconds. An origin can choose immediate staleness or a full second, with nothing in between.
+- **Cause.** One grammar rule, `delta-seconds`, set by RFC 2068 in January 1997 and unchanged in RFC 9111 (2022).
+- **Since 1997.** A disk of that year took about 11 ms to reach data; a current data-centre SSD is specified at 80 µs. NFS, syslog, HLS and TLS session tickets moved to finer units. IPv6 Neighbor Discovery, server-sent events, gRPC, QUIC and Media over QUIC Transport started with them. DNS, cookies and CoAP kept seconds. Chromium has compared age in microseconds since 2008 and WebKit in floating-point seconds since 2009. The draft's Introduction has the timeline and its sources.
+- **Other uses.** Live streaming is the measured case. Stock and prices in a sale, market quotations, betting odds and live scores are examples only.
 - **Today.** The limit is in the wire format, not in every implementation. Of eleven browser engines and caches we read, Chromium, WebKit, Varnish and Souin already compare age with the lifetime at sub-second resolution, two more measure age more finely and reduce it to seconds, and five use whole seconds throughout. None can be told a sub-second lifetime in a standard way. [Survey](#what-implementations-do-today)
 - **Aim.** Let the wire format carry what those implementations already measure, and give the rest a defined target.
 - **Proposal.** Millisecond companions for the cache directives that carry a duration and for the Age response field, so that each cache counts the time already spent upstream.

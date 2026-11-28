@@ -28,6 +28,16 @@ Age: 0
 Age-Ms: 175
 ```
 
+In production we would expect a stale-while-revalidate window as well, since it lets a cache keep answering while it refreshes. Its smallest value above zero is also one second today, so it gets a companion too:
+
+```http
+Cache-Control: max-age=0, max-age-ms=200, stale-while-revalidate=0, stale-while-revalidate-ms=200
+Age: 0
+Age-Ms: 175
+```
+
+- **Stale window.** After the 200 ms of freshness, a supporting cache can serve the stored playlist for another 200 ms while it revalidates. In our tests under load this cut origin requests from about 42 per segment to 5, with the same discovery time. [Test 8](measurements.md#test-8-simulated-hls-players)
+- **Keeping today's policy as the fallback.** An operator sending `max-age=1, stale-while-revalidate=1` today can keep those as the bases and add the two companions. Older caches then behave as they do now.
 - **Known supporting path.** The edge counts 175 ms upstream, 15 ms for its request and 10 ms in its own cache. At exactly 200 ms the playlist is stale. [RFC 9111 §4.2.3](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.3)
 - **Older cache.** It ignores the companions and applies `max-age=0`. The origin can choose `max-age=1` if a full second is acceptable at older caches.
 - **Unknown path.** With that one-second fallback, an older intermediary could hold the response for another 300 ms and still forward `Age: 0` and the original `Age-Ms: 175`. An upgraded edge uses the whole-second policy and drops the unreliable fine age. [RFC 9110 §5.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.1)
